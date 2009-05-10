@@ -1,0 +1,2113 @@
+	.TITLE	FORTH,'NUCLEUS FOR PACE'
+;
+	.ASM	TI
+;
+PART	=	1
+;
+	.LIST	PART=1
+;
+;***************************************************
+;*    THIS IMPLEMENTATION OF THE FORTH LANGUAGE    *
+;*   IS ONE OF A UNIFORM SERIES DEVELOPED BY THE   *
+;*                                                 *
+;*               FORTH INTEREST GROUP              *
+;*                  P.O. BOX 1105                  *
+;*               SAN CARLOS, CA 94070              *
+;*                                                 *
+;*      PACE IMPLEMENTATION BY DAVID KILBRIDGE     *
+;***************************************************
+;
+	.ASECT
+	.=	0010
+;
+;***************************************************
+;*            BOC AND FLAG ABBREVIATIONS           *
+;***************************************************
+;
+Z	=	1
+P	=	2
+BIT0	=	3
+NZ	=	5
+CRY	=	7
+LINK	=	8
+CSET	=      10
+M	=      11
+;
+;***************************************************
+;*                MEMORY ASSIGNMENTS               *
+;***************************************************
+;
+HIBLK	=	03FC0		; HIGHEST BLOCK FWA
+LOBLK	=	02000		; LOWEST BLOCK FWA
+BLKSIZ	=	128		; BLOCK SIZE IN BYTES
+NBUF	=	8		; NO OF BLOCK BUFFERS
+TOPMEM	=	02000		; LWA+1 OF DISK BUFFS
+BUFMEM	=	BLKSIZ/2+2*NBUF	; LTH OF BUFFER AREA
+BUFFS	=	TOPMEM-BUFMEM	; FWA OF DISK BUFFERS
+UVARS	=	BUFFS-32	; START OF USER AREA
+DICT	=	0100		; FWA OF DICTIONARY
+;
+;***************************************************
+;*                START-UP LITERALS                *
+;***************************************************
+;
+ORIG:	JMP	@.+1		; COLD
+	.WORD	CENT		;  ENTRY
+	JMP	@.+1		; WARM
+	.WORD	WENT		;  ENTRY
+CPU:	.WORD	0		; RESERVED
+REV:	.WORD	0		; RESERVED
+FORTH0:	.WORD	TASK-4		; TOP WORD IN DICT
+BACKSP:	.WORD	005F		; BACKSPACE CHARACTER
+U0:	.WORD	UVARS		; START OF USER AREA
+S0:	.WORD	UVARS-65	; TOP OF EMPTY STACK
+R0:	.WORD	UVARS		; TOP OF RETURN STACK
+TIB0:	.WORD	UVARS-65	; SOURCE BUFFER ORIG
+WIDTH0:	.WORD	31		; INITIAL NAME LENGTH
+WARN0:	.WORD	0		; ERROR WARNING MODE
+FENCE0:	.WORD	TASK-4		; BARRIER FOR FORGET
+DP0:	.WORD	FIN		; FWA OF FREE STORAGE
+VOCL0:	.WORD	FORTH+4		; INITIAL VOC-LINK
+	.PAGE
+;
+;***************************************************
+;*                 FORTH REGISTERS                 *
+;***************************************************
+;
+RP:	.WORD	0		; RETURN STACK PR
+UP:	.WORD	0		; USER POINTER
+X	=	2		; INDEX
+Y	=	3		;  REGISTERS
+IP	=	1		; INTERPRETIVE PTR
+W	=	X		; FORTH CODE PTR
+SP	=	Y		; FORTH STACK PTR
+;
+;***************************************************
+;          INSTALLATION-DEPENDENT ROUTINES
+;***************************************************
+;
+GETC	=	07E3B
+PUTC	=	07E44
+INTEST	=	07ECC
+;
+INIT:	LI	0,0
+	CRF	0
+	PULL	Y
+	LI	1,9
+	PULL	0
+	AISZ	1,-1
+	JMP	.-2
+	PFLG	1
+	PUSH	Y
+	JMP	(Y)
+;
+	.BSECT
+	.=.+00F6		; POINTER AREA
+	.ASECT
+;***************************************************
+;*        AIDS FOR NAME FIELD CONSTRUCTION         *
+;***************************************************
+;
+	.FORM	HEAD,1(1),1,1(0),5,1,7
+;
+ORD	=	0		; ORDIN. WD PREC BIT
+IMM	=	1		; IMMED. WD PREC BIT
+SHORT	=	1		; FOR 1-CHAR NAMES
+LONG	=	0		; FOR LONGER NAMES
+EVEN	=	08000		; EVEN-LTH STOP BIT
+ODD	=	00080		; ODD-LTH STOP BIT
+	.PAGE	'DICTIONARY'
+;
+	.ASECT
+	.=	DICT
+;
+;***************************************************
+;*              LIT, PUSH, PUT, NEXT               *
+;***************************************************
+;
+	HEAD	ORD,3,LONG,'L'/256
+	.WORD	'IT'+ODD,0000
+LIT:	.WORD	.+1
+	RCPY	IP,X		; PICK UP
+	LD	0,(X)		;  VALUE
+	AISZ	IP,1		; STEP IP OVER
+PUSH:	AISZ	SP,-1		; EXTEND STACK
+PUT:	ST	0,(SP)		; STORE VALUE
+NEXT:	RCPY	IP,X
+	AISZ	IP,1		; INCREMENT IP
+	LD	W,(X)		; ADDR OF NEXT WORD
+	JMP	@(W)		; JUMP THRU CODE ADDR
+;
+;***************************************************
+;*                     EXECUTE                     *
+;***************************************************
+;
+	HEAD	ORD,7,LONG,'E'/256
+	.WORD	'XE','CU','TE'+ODD,LIT-3
+EXEC:	.WORD	.+1
+	LD	W,0(SP)		; FETCH CODE ADDR
+	AISZ	SP,1		; POP STACK
+	JMP	@(W)		; JUMP THRU CODE ADDR
+;
+;***************************************************
+;*                 BRANCH, OBRANCH                 *
+;***************************************************
+;
+	HEAD	ORD,6,LONG,'B'/256
+	.WORD	'RA','NC','H'+EVEN,EXEC-5
+BRAN:	.WORD	.+1
+	RCPY	IP,X		; ADD OFFSET
+	ADD	IP,(X)		;  TO IP
+	JMP	NEXT
+;
+	HEAD	ORD,7,LONG,'0'/256
+	.WORD	'BR','AN','CH'+ODD,BRAN-5
+ZBRAN:	.WORD	.+1
+	LD	0,0(SP)		; GET BOOLEAN
+	AISZ	SP,1		; POP STACK
+	BOC	Z,BRAN+1	; IF BOOLEAN = 0
+	AISZ	IP,1		; STEP IP OVER OFFSET
+	JMP	NEXT
+;
+;***************************************************
+;*                  LOOP CONTROL                   *
+;***************************************************
+;
+	HEAD	ORD,6,LONG,'('/256
+	.WORD	'LO','OP',')'+EVEN,ZBRAN-5
+XLOOP:	.WORD	.+1
+	LI	0,1		; INCREMENT = 1
+	LD	X,RP		; GET RETURN POINTER
+	ADD	0,(X)		; UDPATE
+	ST	0,(X)		;  INDEX
+	SFLG	CRY		; SUBTRACT
+	SUBB	0,1(X)		;  LIMIT
+	BOC	M,BRAN+1	; IF LIMIT > INDEX
+XLOOP1:	AISZ	IP,1		; STEP IP OVER OFFSET
+	AISZ	X,2		; POP INDEX AND LIMIT
+	ST	X,RP		;  FROM RETURN STACK
+	JMP	NEXT
+;
+	HEAD	ORD,7,LONG,'('/256
+	.WORD	'+L','OO','P)'+ODD,XLOOP-5
+XPLOOP:	.WORD	.+1
+	PUSH	IP		; SAVE IP
+	LD	1,0(SP)		; GET INCREMENT
+	AISZ	SP,1		; POP STACK
+	LD	X,RP		; GET RETURN POINTER
+	LD	0,(X)		; GET INDEX
+	RADD	1,0		; ADD INCREMENT
+	ST	0,(X)		; UPDATE INDEX
+	SFLG	CRY		; SUBTRACT
+	SUBB	0,1(X)		;  LOOP LIMIT
+	BOC	Z,PULL		; IF INDEX = LIMIT
+	RXOR	1,0		; COMBINE SIGN BITS
+	PULL	IP		; RESTORE IP
+	BOC	M,BRAN+1	; IND<LIM XOR INC<0
+	JMP	XLOOP1
+PULL:	PULL	IP		; RESTORE IP
+	JMP	XLOOP1
+;
+;***************************************************
+;*             (DO), POPTWO, POP, I                *
+;***************************************************
+;
+	HEAD	ORD,4,LONG,'('/256
+	.WORD	'DO',')'+EVEN,XPLOOP-5
+XDO:	.WORD	.+1
+	LD	0,1(SP)		; MOVE LIMIT
+	DSZ	RP		;  TO RETURN
+	ST	0,@RP		;   STACK
+	LD	0,0(SP)		; MOVE INITIAL
+	DSZ	RP		;  INDEX TO RETURN
+	ST	0,@RP		;   STACK
+POP2:	AISZ	SP,1		; POP ONE ITEM
+POP:	AISZ	SP,1		; POP ONE ITEM
+	JMP	NEXT
+;
+	HEAD	ORD,1,SHORT,'I'/256
+	.WORD	XDO-4
+I:	.WORD	R+1		; GET FROM RTN STACK
+;
+;***************************************************
+;*                      DIGIT                      *
+;***************************************************
+;
+	HEAD	ORD,5,LONG,'D'/256
+	.WORD	'IG','IT'+ODD,I-2
+DIGIT:	.WORD	.+1
+	LD	0,1(SP)		; GET ASCII
+	AISZ	0,-0030
+	BOC	M,BAD		; ASCII < 30
+	SKG	0,NINE
+	JMP	CKBASE		; 30 <= ASCII <= 39
+	AISZ	0,-7
+	SKG	0,NINE
+	JMP	BAD		; 39 < ASCII < 41
+CKBASE:	SKG	0,0(SP)
+	SKNE	0,0(SP)
+	JMP	BAD		; ASCII >= BASE
+	ST	0,1(SP)		; PUT DIGIT SECOND
+	LI	0,1		;  AND TRUE FLAG
+	JMP	PUT		;   ON BOTTOM
+BAD:	LI	0,0		; LEAVE FALSE FLAG
+	JMP	BIN		;  ON BOTTOM
+NINE:	.WORD	9
+;
+;***************************************************
+;*                     (FIND)
+;***************************************************
+;
+	HEAD	ORD,6,LONG,'('/256
+	.WORD	'FI','ND',')'+EVEN,DIGIT-4
+PFIND:	.WORD	.+1
+	PUSH	IP		; SAVE IP
+	AISZ	SP,-1		; EXTEND STACK
+	LD	X,1(SP)		; GET NFA
+NEWNAM:	LD	0,@2(SP)	; FIRST WD OF STRING
+	LD	1,(X)		; FIRST WD OF NAME
+	RXOR	1,0
+	AND	0,X3FFF		; CLEAR START & PREC
+	SKAZ	0,X7F7F		; CMP LTH, FIRST CHAR
+	JMP	MISS		; IF MISMATCH
+	BOC	NZ,FOUND	; IF ONLY ONE CHAR
+	LD	1,2(SP)		; INITIALIZE
+	ST	1,0(SP)		;  STRING POINTER
+CYCLE:	AISZ	X,1		; BUMP NAME AND
+	ISZ	0(SP)		;  STRING POINTERS
+	LD	0,@0(SP)	; NEXT WD OF STRING
+	LD	1,(X)		; NEXT WD OF NAME
+	RXOR	1,0
+	BOC	P,.+2		; IF HI BYTE IS LAST,
+	AND	0,XFF00		;  CLEAR LOW BYTE
+	SKAZ	0,X7F7F		; COMPARE CHARS
+	JMP	MISS		; IF MISMATCH
+	BOC	Z,CYCLE		; IF NO STOP BIT
+FOUND:	AISZ	X,3		; FORM PFA
+	ST	X,2(SP)		; PUT THIRD ON STACK
+	LD	0,@1(SP)	; FIRST WD OF NAME
+	SHR	0,8,0		; GET LENGTH BYTE
+	ST	0,1(SP)		; PUT SECOND ON STACK
+	LI	0,1		; BOOLEAN TRUE
+	PULL	IP		; RESTORE IP
+	JMP	PUT		; BOOLEAN ON BOTTOM
+MISS:	SKAZ	0,X8080		; TEST FOR A STOP BIT
+	JMP	ENDNAM		; IF PRESENT
+	AISZ	X,1		; BUMP NAME POINTER
+	LD	0,(X)		; GET NEXT WORD
+	JMP	MISS		; CONTINUE SCANNING
+ENDNAM:	LD	X,1(X)		; FETCH LINK
+	ST	X,1(SP)		; NEW NFA
+	AISZ	X,0		; TEST FOR LINK = 0
+	JMP	NEWNAM		; IF NOT DONE
+	ST	X,2(SP)		; PUT BOOLEAN FALSE
+	PULL	IP		; RESTORE IP
+	JMP	POP2
+;
+X3FFF:	.WORD	03FFF
+X7F7F:	.WORD	07F7F
+XFF00:	.WORD	0FF00
+X8080:	.WORD	08080
+;
+;***************************************************
+;*                     ENCLOSE                     *
+;***************************************************
+;
+;  SCAN SOURCE STRING, PACKED TWO CHARACTERS/WORD,
+;   FOR DELIMITER ON TOP OF STACK, OR ASCII NULL.
+;
+	HEAD	ORD,7,LONG,'E'/256
+	.WORD	'NC','LO','SE'+ODD,PFIND-5
+ENCL:	.WORD	.+1
+	PUSH	IP		; SAVE IP
+	AISZ	SP,-2		; EXTEND STACK
+	LD	0,2(SP)		; GET DELIMITER
+	AND	0,RMASK		; USE LOWER
+	RCPY	0,1		;  BYTE ONLY
+	SHL	1,8,0		; DOUBLE UP
+	RADD	0,1		;  DELIMITER
+	LD	0,3(SP)		; GET BYTE ADDRESS
+	PFLG	LINK
+	ROR	0,1,1		; CONVERT ADDRESS
+	ST	0,0(SP)		; SAVE WORD ADDRESS
+	LI	X,0		; CLEAR COUNT
+NEW1:	LD	0,@0(SP)	; GET NEXT 2 BYTES
+	RXOR	1,0		; COMPARE WITH DELIMS
+	BOC	LINK,RT1	; IF START ADDR ODD
+	SKAZ	0,LMASK		; TEST LEFT BYTE
+	JMP	LNDEL		; IF NOT DELIM
+	AISZ	X,1		; BUMP COUNT
+RT1:	SKAZ	0,RMASK		; TEST RIGHT BYTE
+	JMP	RNDEL		; IF NOT DELIM
+	AISZ	X,1		; BUMP COUNT
+	PFLG	LINK		; LEFT BYTE OF
+	ISZ	0(SP)		;  FOLLOWING WORD
+	JMP	NEW1		;   IS NEXT
+RNDEL:	SFLG	LINK		; REMEMBER WHICH BYTE
+LNDEL:	ST	X,2(SP)		; SET FC OFFSET
+	BOC	LINK,RT2	; RESUME AT SAME BYTE
+NEW2:	LD	0,@0(SP)	; GET DATA
+	ST	X,1(SP)		; MAYBE EW OFFSET
+	SKAZ	0,LMASK		; TEST FOR NULL
+	JMP	NONUL
+NUL:	ST	X,0(SP)		; NC OFFSET
+	SKNE	X,2(SP)		; IS NC = FC?
+	ISZ	1(SP)		; YES, BUMP EW
+	PULL	IP		; RESTORE IP
+	JMP	NEXT
+NONUL:	AISZ	X,1		; BUMP COUNT
+	RXOR	1,0
+	SKAZ	0,LMASK		; TEST FOR DELIM
+	JMP	RT2
+DELIM:	ST	X,0(SP)		; NS OFFSET
+	PULL	IP		; RESTORE IP
+	JMP	NEXT
+RT2:	RXOR	1,0
+	ST	X,1(SP)		; MAYBE EW
+	AND	0,RMASK
+	BOC	Z,NUL		; TEST FOR NULL
+	AISZ	X,1		; BUMP COUNT
+	RXOR	1,0
+	AND	0,RMASK
+	BOC	Z,DELIM		; TEST FOR DELIM
+	ISZ	0(SP)		; BACK FOR
+	JMP	NEW2		;  NEXT WORD
+LMASK:	.WORD	0FF00
+RMASK:	.WORD	000FF
+;
+;***************************************************
+;*                TERMINAL VECTORS                 *
+;***************************************************
+;
+; THESE WORDS VECTOR TO INSTALLATION-SPECIFIC CODE
+;
+	HEAD	ORD,4,LONG,'E'/256
+	.WORD	'MI','T'+EVEN,ENCL-5
+EMIT:	.WORD	PEMIT
+;
+	HEAD	ORD,3,LONG,'K'/256
+	.WORD	'EY'+ODD,EMIT-4
+KEY:	.WORD	PKEY
+;
+	HEAD	ORD,9,LONG,'?'/256
+	.WORD	'TE','RM','IN','AL'+ODD,KEY-3
+QTERM:	.WORD	PQTERM
+;
+	HEAD	ORD,2,LONG,'C'/256
+	.WORD	'R'+EVEN,QTERM-6
+CR:	.WORD	PCR
+;
+;***************************************************
+;*                      MOVE                       *
+;***************************************************
+;
+;  NOTE THAT THIS WORD MOVES DATA IN 16-BIT UNITS.
+;
+	HEAD	ORD,4,LONG,'M'/256
+	.WORD	'OV','E'+EVEN,CR-3
+MOVE:	.WORD	.+1
+	LD	0,0(SP)		; GET COUNT
+	BOC	Z,MOVE2		; IF ZERO
+	PUSH	IP		; SAVE IP
+	RCPY	0,1
+	LD	X,2(SP)		; SOURCE ADDRESS
+MOVE1:	LD	0,(X)		; GET DATA ITEM
+	ST	0,@1(SP)	; STORE AT DEST
+	AISZ	X,1		; INCREMENT
+	ISZ	1(SP)		;  ADDRESSES
+	AISZ	1,-1		; DECREMENT COUNT
+	JMP	MOVE1		; UNITL DONE
+	PULL	IP		; RESTORE IP
+MOVE2:	AISZ	SP,3		; POP ARGUMENTS
+	JMP	NEXT
+;
+;***************************************************
+;*                 U*, FOR 16 BITS                 *
+;***************************************************
+;
+	HEAD	ORD,2,LONG,'U'/256
+	.WORD	'*'+EVEN,MOVE-4
+USTAR:	.WORD	.+1
+	PUSH	IP		; SAVE IP
+	LD	0,0(SP)		; GET MULTIPLIER
+	LI	1,0		; CLEAR RESULT
+	LI	X,16		; LOOP COUNT
+	CAI	0,0		; COMPLEMENT MPLR
+LP:	RADD	1,1		; SHIFT LO INTO CRY
+	RADC	0,0		; ROTATE MPLR LEFT
+	BOC	CSET, TEST	; TEST FOR ADD
+	ADD	1,1(SP)		; ADD IF MPLR BIT=1
+	SUBB	0, MINUS1	; ADD CARRY TO HI
+TEST:	AISZ	X,-1		; DECR LOOP COUNT
+	JMP	LP		; REPEAT UNTIL LIMIT
+	ST	1,1(SP)		; PUT LO-ORDER SECOND
+	PULL	IP		; RESTORE IP
+	JMP	PUT		; HI-ORDER ON BOTTOM
+MINUS1:	.WORD	-1
+;
+;***************************************************
+;*                 U/, FOR 32 BITS                 *
+;***************************************************
+;
+	HEAD	ORD,2,LONG,'U'/256
+	.WORD	'/'+EVEN,USTAR-3
+USLASH:	.WORD	.+1
+	PUSH	IP		; SAVE IP
+	LD	1,1(SP)		; HI-ORDER DIVIDEND
+	LD	0,2(SP)		; LO-ORDER DIVIDEND
+	LD	X,0(SP)		; GET DIVISOR
+	CAI	X,1		; SAVE -(DIVISOR) FOR
+	ST	X,1(SP)		;  CONVENIENCE
+	LI	X,16		; LOOP COUNT
+	SHL	0,1,1		; SHIFT LO INTO LINK
+POOL:	ROL	1,1,1		; ROTATE HI WITH LINK
+	ROL	0,1,1		; ROTATE HI INTO QUOT
+	ADD	1,1(SP)		; SUBTR DIVSR FROM HI
+	SUBB	0,MIN1		; ADD CARRY TO QUOT
+	BOC	BIT0,.+2	; IF QUOT BIT = 0,
+	ADD	1,0(SP)		;  ADD DIVISOR BACK
+	AISZ	X,-1		; DECREMENT LOOP CNT
+	JMP	POOL		; REPEAT UNTIL LIMIT
+	ST	1,2(SP)		; REMAINDER SECOND
+	PULL	IP		; RESTORE IP
+	JMP	BIN		; QUOTIENT ON BOTTOM
+MIN1:	.WORD	-1
+;
+;***************************************************
+;*                    LOGICALS                     *
+;***************************************************
+;
+	HEAD	ORD,3,LONG,'A'/256
+	.WORD	'ND'+ODD,USLASH-3
+AND:	.WORD	.+1
+	LD	0,1(SP)		; GET SECOND
+	AND	0,0(SP)		;  AND WITH BOTTOM
+	JMP	BIN		; REMOVE ARGS
+;
+	HEAD	ORD,2,LONG,'O'/256
+	.WORD	'R'+EVEN,AND-3
+OR:	.WORD	.+1
+	LD	0,1(SP)		; GET SECOND
+	OR	0,0(SP)		;  OR WITH BOTTOM
+	JMP	BIN		; REMOVE ARGS
+;
+	HEAD	ORD,3,LONG,'X'/256
+	.WORD	'OR'+ODD,OR-3
+XOR:	.WORD	.+1
+	LD	0,1(SP)		; GET SECOND
+	LD	X,0(SP)		; GET BOTTOM
+	RXOR	X,0		; FORM EXCLUSIVE OR
+	JMP	BIN		; REMOVE ARGS
+;
+;***************************************************
+;*              STACK INITIALIZATION               *
+;***************************************************
+;
+	HEAD	ORD,3,LONG,'S'/256
+	.WORD	'P@'+ODD,XOR-3
+SPAT:	.WORD	.+1
+	RCPY	SP,0		; STACK POINTER
+	JMP	PUSH		; PUSH ON STACK
+;
+	HEAD	ORD,3,LONG,'S'/256
+	.WORD	'P!'+ODD,SPAT-3
+SPSTOR:	.WORD	.+1
+	LD	X,UP		; GET USER POINTER
+	LD	SP,3(X)		; FETCH SP0
+	JMP	NEXT
+;
+	HEAD	ORD,3,LONG,'R'/256
+	.WORD	'P!'+ODD,SPSTOR-3
+RPSTOR:	.WORD	.+1
+	LD	X,UP		; GET USER POINTER
+	LD	0,4(X)		; FETCH R0
+	ST	0,RP		; SET RETURN POINTER
+	JMP	NEXT
+;
+	HEAD	ORD,2,LONG,';'/256
+	.WORD	'S'+EVEN,RPSTOR-3
+SEMIS:	.WORD	.+1
+	LD	0,@RP		; RESTORE
+	RCPY	0,IP		;  OLD IP
+	ISZ	RP		; POP RETURN STACK
+	JMP	NEXT
+;
+;***************************************************
+;*               RETURN STACK WORDS                *
+;***************************************************
+;
+	HEAD	ORD,5,LONG,'L'/256
+	.WORD	'EA','VE'+ODD,SEMIS-3
+LEAVE:	.WORD	.+1
+	LD	X,RP		; GET RETURN POINTER
+	LD	0,0(X)		; GET LOOP INDEX
+	ST	0,1(X)		; MAKE LIMIT EQUAL
+	JMP	NEXT
+;
+	HEAD	ORD,2,LONG,'>'/256
+	.WORD	'R'+EVEN,LEAVE-4
+TOR:	.WORD	.+1
+	DSZ	RP		; EXTEND RETURN STACK
+	LD	0,(SP)		; GET DATA ITEM
+	ST	0,@RP		; PUT ON RETURN STACK
+	JMP	POP		; POP FROM DATA STACK
+;
+	HEAD	ORD,2,LONG,'R'/256
+	.WORD	'>'+EVEN,TOR-3
+FROMR:	.WORD	.+1
+	LD	0,@RP		; GET FROM RETURN STK
+	ISZ	RP		; POP RETURN STACK
+	JMP	PUSH		; PUSH ON DATA STACK
+;
+	HEAD	ORD,1,SHORT,'R'/256
+	.WORD	FROMR-3
+R:	.WORD	.+1
+	LD	0,@RP		; GET NONDESTRUCTIVE
+	JMP	PUSH		; PUSH ON DATA STACK
+;
+;***************************************************
+;*               TESTS AND LOGICALS                *
+;***************************************************
+;
+	HEAD	ORD,2,LONG,'0'/256
+	.WORD	'='+EVEN,R-2
+ZEQU:	.WORD	.+1
+	LI	0,0		; RETURN ZERO
+	SKNE	0,0(SP)		;  IF DATA NONZERO
+	LI	0,1		; OTHERWISE RETURN 1
+	JMP	PUT
+;
+	HEAD	ORD,2,LONG,'0'/256
+	.WORD	'<'+EVEN,ZEQU-3
+ZLESS:	.WORD	.+1
+	LI	0,0		; RETURN ZERO
+	SKG	0,0(SP)		;  IF DATA >= ZERO
+	JMP	PUT
+	LI	0,1		; OTHERWISE RETURN 1
+	JMP	PUT
+;
+;***************************************************
+;*                  MATH, BINARY                   *
+;***************************************************
+;
+	HEAD	ORD,1,SHORT,'+'/256
+	.WORD	ZLESS-3
+PLUS:	.WORD	.+1
+	LD	0,0(SP)		; ADD BOTTOM TWO
+	ADD	0,1(SP)		;  STACK VALUES
+BIN:	AISZ	SP,1		; REMOVE ONE ARG
+	JMP	PUT		; REPL OTHER W/ RESULT
+;
+	HEAD	ORD,2,LONG,'D'/256
+	.WORD	'+'+EVEN,PLUS-2
+DPLUS:	.WORD	.+1
+	LD	0,3(SP)		; AUGEND LOW-ORDER
+	ADD	0,1(SP)		; ADDEND LOW-ORDER
+	ST	0,3(SP)		; SUM LOW-ORDER
+	LD	0,2(SP)		; AUGEND HI-ORDER
+	LD	X,0(SP)		; ADDEND HI-ORDER
+	RADC	X,0		; ADD WITH CARRY
+	ST	0,2(SP)		; SUM HI-ORDER
+	JMP	POP2
+;
+	HEAD	ORD,5,LONG,'M'/256
+	.WORD	'IN','US'+ODD,DPLUS-3
+MINUS:	.WORD	.+1
+	LD	0,(SP)		; GET STACK VALUE
+	CAI	0,1		;  AND FORM 2'S COMP
+	JMP	PUT
+;
+	HEAD	ORD,6,LONG,'D'/256
+	.WORD	'MI','NU','S'+EVEN,MINUS-4
+DMINUS:	.WORD	.+1
+	SFLG	CRY		; CLEAR BORROW
+	LI	0,0		; SUBTRACT LO-ORDER
+	SUBB	0,1(SP)		;  FROM 0
+	ST	0,1(SP)
+	LI	0,0		; SUBTRACT HI-ORDER
+	SUBB	0,0(SP)		;  FROM 0 WITH BORROW
+	JMP	PUT
+;
+;***************************************************
+;*                STACK MANIPULATION               *
+;***************************************************
+;
+	HEAD	ORD,4,LONG,'O'/256
+	.WORD	'VE','R'+EVEN,DMINUS-5
+OVER:	.WORD	.+1
+	LD	0,1(SP)		; GET SECOND VALUE
+	JMP	PUSH		; PUSH ON STACK
+;
+	HEAD	ORD,4,LONG,'D'/256
+	.WORD	'RO','P'+EVEN,OVER-4
+DROP:	.WORD	POP		; VECTOR DIRECTLY
+;
+	HEAD	ORD,4,LONG,'S'/256
+	.WORD	'WA','P'+EVEN,DROP-4
+SWAP:	.WORD	.+1
+	LD	0,1(SP)		; EXCHANGE TOP
+	LD	X,0(SP)		;  TWO STACK
+	ST	X,1(SP)		;   VALUES
+	JMP	PUT
+;
+	HEAD	ORD,3,LONG,'D'/256
+	.WORD	'UP'+ODD,SWAP-4
+DUP:	.WORD	.+1
+	LD	0,0(SP)		; GET BOTTOM VALUE
+	JMP	PUSH		; PUSH A COPY OF IT
+;
+;***************************************************
+;*  MEMORY INCREMENT, COMPLEMENT, ADDRESS CONVERT  *
+;***************************************************
+;
+	HEAD	ORD,2,LONG,'+'/256
+	.WORD	'!'+EVEN,DUP-3
+PSTORE:	.WORD	.+1
+	LD	0,@0(SP)	; GET VALUE
+	ADD	0,1(SP)		; ADD INCREMENT
+	ST	0,@0(SP)	; STORE AT ADDRESS
+	JMP	POP2		; REMOVE BOTH
+;
+;  THE FOLLOWING WORD EXPECTS A BYTE PSEUDO-ADDRESS
+;
+	HEAD	ORD,6,LONG,'T'/256
+	.WORD	'OG','GL','E'+EVEN,PSTORE-3
+TOGGLE:	.WORD	.+1
+	LD	X,1(SP)		; GET BYTE ADDRESS
+	PFLG	LINK		; CONVERT TO
+	ROR	X,1,1		;  WORD ADDRESS
+	ST	X,1(SP)		; SAVE FOR LATER
+	LD	0,(X)		; GET DATA WORD
+	LD	X,0(SP)		; GET BIT PATTERN
+	BOC	LINK,.+2	; EVEN BYTE ADDRESS
+	SHL	X,8,0		;  MEANS LEFT BYTE
+	RXOR	X,0		; COMPL SELECTED BITS
+	ST	0,@1(SP)	; REPLACE DATA WORD
+	JMP	POP2
+;
+;     THE FOLLOWING WORD CONVERTA A 15-BIT WORD
+;      ADDRESS TO A 16-BIT BYTE PSEUDO-ADDRESS.
+;
+	HEAD	ORD,4,LONG,'B'/256
+	.WORD	'YT','E'+EVEN,TOGGLE-5
+BYTE:	.WORD	.+1
+	LD	0,0(SP)		; GET WORD ADDRESS
+	RADD	0,0		; MULTIPLY BY 2
+	JMP	PUT
+;
+;     THE FOLLOWING ORD CONVERTS A 16-BIT BYTE
+;      PSEUDO-ADDRESS TO A 15-BIT WORD ADDRESS.
+;
+	HEAD	ORD,4,LONG,'C'/256
+	.WORD	'EL','L'+EVEN,BYTE-4
+CELL:	.WORD	.+1
+	LD	0,0(SP)		; GET BYTE ADDRESS
+	SHR	0,1,0		; DIVIDE BY 2
+	JMP	PUT
+;
+;***************************************************
+;*             MEMORY FETCH AND STORE              *
+;***************************************************
+;
+	HEAD	ORD,1,SHORT,'@'/256
+	.WORD	CELL-4
+AT:	.WORD	.+1
+	LD	0,@0(SP)	; GET VALUE
+	JMP	PUT
+;
+;  THE FOLLOWING WORD EXPECTS A BYTE PSEUDO-ADDRESS
+;
+	HEAD	ORD,2,LONG,'C'/256
+	.WORD	'@'+EVEN,AT-2
+CAT:	.WORD	.+1
+	LD	X,0(SP)		; GET BYTE ADDRESS
+	PFLG	LINK		; CONVERT TO
+	ROR	X,1,1		;  WORD ADDRESS
+	LD	0,(X)		; GET DATA WORD
+	BOC	LINK,.+2	; LINK = 0 MEANS
+	SHR	0,8,0		;   LEFT BYTE
+	AND	0,XFF		; CLEAR UNWANTED BYTE
+	JMP	PUT
+XFF:	.WORD	00FF
+;
+	HEAD	ORD,1,SHORT,'!'/256
+	.WORD	CAT-3
+STORE:	.WORD	.+1
+	LD	0,1(SP)		; GET VALUE
+	ST	0,@0(SP)	; STORE AT ADDRESS
+	JMP	POP2		; REMOVE BOTH
+;
+;  THE FOLLOWING WORD EXPECTS A BYTE PSEUDO-ADDRESS
+;
+	HEAD	ORD,2,LONG,'C'/256
+	.WORD	'!'+EVEN,STORE-2
+CSTORE:	.WORD	.+1
+	PUSH	IP		; SAVE IP
+	LD	X,0(SP)		; GET BYTE ADDRESS
+	PFLG	LINK		; CONVERT TO
+	ROR	X,1,1		; WORD ADDRESS
+	LD	0,X00FF
+	LD	1,1(SP)		; BYTE OT BE
+	RAND	0,1		;  STORED
+	CAI	0,0		; SET UP MASK
+	BOC	LINK,.+3	;  AND CLEAR
+	CAI	0,0		;   APPROPRIATE
+	SHL	1,8,0		;    HALF OF WORD
+	AND	0,(X)		;     TO STORE INTO
+	RADD	1,0		; ADD IN BYTE
+	ST	0,(X)		; STORE ALTERED WORD
+	PULL	IP		; RESTORE IP
+	JMP	POP2		; REMOVE ARGUMENTS
+X00FF:	.WORD	00FF
+;
+;***************************************************
+;*                       :, ;                      *
+;***************************************************
+;
+	HEAD	IMM,1,SHORT,':'/256
+	.WORD	CSTORE-3
+COLON:	.WORD	DOCOL,QEXEC,SCSP,CURR,AT,CONT
+	.WORD	STORE,CREATE,RBRAC,PSCODE
+;
+DOCOL:	DSZ	RP		; EXTEND RETURN STK
+	RCPY	IP,0		; SAVE IP ON
+	ST	0,@RP		; RETURN STACK
+	LI	IP,1		; POINT IP TO WORD
+	RADD	W,IP		;  AFTER DOCOL
+	JMP	NEXT
+;
+	HEAD	IMM,1,SHORT,';'/256
+	.WORD	COLON-2
+SEMI:	.WORD	DOCOL,QCSP,COMPIL,SEMIS
+	.WORD	SMUDGE,LBRAC,SEMIS
+;
+;***************************************************
+;*             CONSTANT, VARIABLE, USER            *
+;***************************************************
+;
+	HEAD	ORD,8,LONG,'C'/256
+	.WORD	'ON','ST','AN','T'+EVEN,SEMI-2
+CON:	.WORD	DOCOL,CREATE,SMUDGE,COMMA,PSCODE
+;
+DOCON:	LD	0,1(W)		; GET PARAMETER
+	JMP	PUSH		; PUSH ON STACK
+;
+	HEAD	ORD,8,LONG,'V'/256
+	.WORD	'AR','IA','BL','E'+EVEN,CON-6
+VAR:	.WORD	DOCOL,CON,PSCODE
+;
+DOVAR:	LI	0,1		; FORM ADDRESS
+	RADD	W,0		;  OF PARAMETER
+	JMP	PUSH		; PUSH ON STACK
+;
+	HEAD	ORD,4,LONG,'U'/256
+	.WORD	'SE','R'+EVEN,VAR-6
+USER:	.WORD	DOCOL,CON,PSCODE
+;
+DOUSER:	LD	0,1(W)		; GET OFFSET
+	ADD	0,UP		; ADD USER POINTER
+	JMP	PUSH		; PUSH ON STACK
+;
+;***************************************************
+;*                DEFINED CONSTANTS                *
+;***************************************************
+;
+	HEAD	ORD,1,SHORT,'0'/256
+	.WORD	USER-4
+ZERO:	.WORD	DOCON,0
+;
+	HEAD	ORD,1,SHORT,'1'/256
+	.WORD	ZERO-2
+ONE:	.WORD	DOCON,1
+;
+	HEAD	ORD,1,SHORT,'2'/256
+	.WORD	ONE-2
+TWO:	.WORD	DOCON,2
+;
+	HEAD	ORD,1,SHORT,'3'/256
+	.WORD	TWO-2
+THREE:	.WORD	DOCON,3
+;
+	HEAD	ORD,2,LONG,'B'/256
+	.WORD	'L'+EVEN,THREE-2
+BL:	.WORD	DOCON,' '/256
+;
+	HEAD	ORD,5,LONG,'F'/256
+	.WORD	'IR','ST'+ODD,BL-3
+FIRST:	.WORD	DOCON,BUFFS
+;
+	HEAD	ORD,5,LONG,'L'/256
+	.WORD	'IM','IT'+ODD,FIRST-4
+LIMIT:	.WORD	DOCON,TOPMEM
+;
+	HEAD	ORD,5,LONG,'B'/256
+	.WORD	'/B','UF'+ODD,LIMIT-4
+BBUF:	.WORD	DOCON,BLKSIZ
+;
+	HEAD	ORD,5,LONG,'B'/256
+	.WORD	'/S','CR'+ODD,BBUF-4
+BSCR:	.WORD	DOCON,1024/BLKSIZ
+;
+;     THE FOLLOWING WORD EXPECTS A WORD-OFFSET
+;            AND RETURNS A WORD-ADDRESS.
+;
+	HEAD	ORD,7,LONG,'+'/256
+	.WORD	'OR','IG','IN'+ODD,BSCR-4
+PORIG:	.WORD	DOCOL,LIT,ORIG,PLUS,SEMIS
+;
+;***************************************************
+;*                  USER VARIABLES                 *
+;***************************************************
+;
+	HEAD	ORD,2,LONG,'S'/256
+	.WORD	'0'+EVEN,PORIG-5
+SZERO:	.WORD	DOUSER,03
+;
+	HEAD	ORD,2,LONG,'R'/256
+	.WORD	'0'+EVEN,SZERO-3
+RZERO:	.WORD	DOUSER,04
+;
+	HEAD	ORD,3,LONG,'T'/256
+	.WORD	'IB'+ODD,RZERO-3
+TIB:	.WORD	DOUSER,05
+;
+	HEAD	ORD,5,LONG,'W'/256
+	.WORD	'ID','TH'+ODD,TIB-3
+WIDTH:	.WORD	DOUSER,06
+;
+	HEAD	ORD,7,LONG,'W'/256
+	.WORD	'AR','NI','NG'+ODD,WIDTH-4
+WARN:	.WORD	DOUSER,07
+;
+	HEAD	ORD,5,LONG,'F'/256
+	.WORD	'EN','CE'+ODD,WARN-5
+FENCE:	.WORD	DOUSER,08
+;
+	HEAD	ORD,2,LONG,'D'/256
+	.WORD	'P'+EVEN,FENCE-4
+DP:	.WORD	DOUSER,09
+;
+	HEAD	ORD,8,LONG,'V'/256
+	.WORD	'OC','-L','IN','K'+EVEN,DP-3
+VOCL:	.WORD	DOUSER,0A
+;
+	HEAD	ORD,3,LONG,'B'/256
+	.WORD	'LK'+ODD,VOCL-6
+BLK:	.WORD	DOUSER,0B
+;
+	HEAD	ORD,2,LONG,'I'/256
+	.WORD	'N'+EVEN,BLK-3
+IN:	.WORD	DOUSER,0C
+;
+	HEAD	ORD,3,LONG,'O'/256
+	.WORD	'UT'+ODD,IN-3
+OUT:	.WORD	DOUSER,0D
+;
+	HEAD	ORD,3,LONG,'S'/256
+	.WORD	'CR'+ODD,OUT-3
+SCR:	.WORD	DOUSER,0E
+;
+	HEAD	ORD,6,LONG,'O'/256
+	.WORD	'FF','SE','T'+EVEN,SCR-3
+OFFSET:	.WORD	DOUSER,0F
+;
+	HEAD	ORD,7,LONG,'C'/256
+	.WORD	'ON','TE','XT'+ODD,OFFSET-5
+CONT:	.WORD	DOUSER,010
+;
+	HEAD	ORD,7,LONG,'C'/256
+	.WORD	'UR','RE','NT'+ODD,CONT-5
+CURR:	.WORD	DOUSER,011
+;
+	HEAD	ORD,5,LONG,'S'/256
+	.WORD	'TA','TE'+ODD,CURR-5
+STATE:	.WORD	DOUSER,012
+;
+	HEAD	ORD,4,LONG,'B'/256
+	.WORD	'AS','E'+EVEN,STATE-4
+BASE:	.WORD	DOUSER,013
+;
+	HEAD	ORD,3,LONG,'D'/256
+	.WORD	'PL'+ODD,BASE-4
+DPL:	.WORD	DOUSER,014
+;
+	HEAD	ORD,3,LONG,'F'/256
+	.WORD	'LD'+ODD,DPL-3
+FLD:	.WORD	DOUSER,015
+;
+	HEAD	ORD,3,LONG,'C'/256
+	.WORD	'SP'+ODD,FLD-3
+CSP:	.WORD	DOUSER,016
+;
+	HEAD	ORD,2,LONG,'R'/256
+	.WORD	','+EVEN,CSP-3
+RNUM:	.WORD	DOUSER,017
+;
+	HEAD	ORD,3,LONG,'H'/256
+	.WORD	'LD'+ODD,RNUM-3
+HLD:	.WORD	DOUSER,018
+;
+;***************************************************
+;*                  MISCELLANEOUS                  *
+;***************************************************
+;
+	HEAD	ORD,2,LONG,'1'/256
+	.WORD	'+'+EVEN,HLD-3
+ONEP:	.WORD	.+1
+	ISZ	0(SP)		; ADD ONE
+	JMP	NEXT		;  TO BOTTOM
+	JMP	NEXT		;   OF STACK
+;
+	HEAD	ORD,2,LONG,'2'/256
+	.WORD	'+'+EVEN,ONEP-3
+TWOP:	.WORD	DOCOL,TWO,PLUS,SEMIS
+;
+	HEAD	ORD,4,LONG,'H'/256
+	.WORD	'ER','E'+EVEN,TWOP-3
+HERE:	.WORD	DOCOL,DP,AT,SEMIS
+;
+	HEAD	ORD,5,LONG,'A'/256
+	.WORD	'LL','OT'+ODD,HERE-4
+ALLOT:	.WORD	DOCOL,DP,PSTORE,SEMIS
+;
+;   : ,   HERE  !  1 ALLOT  ;
+;
+	HEAD	ORD,1,SHORT,','/256
+	.WORD	ALLOT-4
+COMMA:	.WORD	DOCOL,HERE,STORE,ONE,ALLOT,SEMIS
+;
+	HEAD	ORD,1,SHORT,'-'/256
+	.WORD	COMMA-2
+SUB:	.WORD	.+1
+	LD	0,1(SP)		; GET MINUENT
+	SFLG	CRY		; CLEAR BORROW
+	SUBB	0,0(SP)		; SUBTRACT SUBTRAHEND
+	JMP	BIN
+;
+	HEAD	ORD,1,SHORT,'='/256
+	.WORD	SUB-2
+EQUAL:	.WORD	DOCOL,SUB,ZEQU,SEMIS
+;
+	HEAD	ORD,1,SHORT,'<'/256
+	.WORD	EQUAL-2
+LESS:	.WORD	DOCOL,SUB,ZLESS,SEMIS
+;
+	HEAD	ORD,1,SHORT,'>'/256
+	.WORD	LESS-2
+GREAT:	.WORD	DOCOL,SWAP,LESS,SEMIS
+;
+	HEAD	ORD,3,LONG,'R'/256
+	.WORD	'OT'+ODD,GREAT-2
+ROT:	.WORD	.+1
+	LD	0,2(SP)		; GET THIRD
+	LD	X,1(SP)		; MOVE SECOND
+	ST	X,2(SP)		;  TO THIRD
+	LD	X,0(SP)		; MOVE BOTTOM
+	ST	X,1(SP)		;  TO SECOND
+	JMP	PUT		; PUT THIRD ON BOTTOM
+;
+	HEAD	ORD,5,LONG,'S'/256
+	.WORD	'PA','CE'+ODD,ROT-3
+SPACE:	.WORD	DOCOL,BL,EMIT,SEMIS
+;
+	HEAD	ORD,4,LONG,'-'/256
+	.WORD	'DU','P'+EVEN,SPACE-4
+DDUP:	.WORD	.+1
+	LD	0,0(SP)		; GET BOTTOM OF STACK
+	BOC	Z,.+2
+	JMP	PUSH		; DUP IF NOT ZERO
+	JMP	NEXT
+;
+;***************************************************
+;*          VARIABLE LENGTH NAME SUPPORT           *
+;***************************************************
+;
+	HEAD	ORD,8,LONG,'T'/256
+	.WORD	'RA','VE','RS','E'+EVEN,DDUP-4
+TRAV:	.WORD	DOCOL,SWAP
+TRAV1:	.WORD	OVER,PLUS,LIT,007F
+	.WORD	OVER,CAT,LESS,ZBRAN
+	.WORD	TRAV1-.,SWAP,DROP,SEMIS
+;
+	HEAD	ORD,6,LONG,'L'/256
+	.WORD	'AT','ES','T'+EVEN,TRAV-6
+LATEST:	.WORD	DOCOL,CURR,AT,AT,SEMIS
+;
+;   : LFA   2  -  ;
+;
+	HEAD	ORD,3,LONG,'L'/256
+	.WORD	'FA'+ODD,LATEST-5
+LFA:	.WORD	DOCOL,TWO,SUB,SEMIS
+;
+;   : CFA   1  -  ;
+;
+	HEAD	ORD,3,LONG,'C'/256
+	.WORD	'FA'+ODD,LFA-3
+CFA:	.WORD	DOCOL,ONE,SUB,SEMIS
+;
+;   : NFA   2  -  BYTE  -1  TRAVERSE
+;                       -1  TRAVERSE  CELL  ;
+;
+	HEAD	ORD,3,LONG,'N'/256
+	.WORD	'FA'+ODD,CFA-3
+NFA:	.WORD	DOCOL,TWO,SUB,BYTE,LIT,-1
+	.WORD	TRAV,LIT,-1,TRAV,CELL,SEMIS
+;
+;   : PFA   BYTE  1  TRAVERSE  CELL  3  +  ;
+;
+	HEAD	ORD,3,LONG,'P'/256
+	.WORD	'FA'+ODD,NFA-3
+PFA:	.WORD	DOCOL,BYTE,ONE,TRAV
+	.WORD	CELL,THREE,PLUS,SEMIS
+;
+;***************************************************
+;*           ERROR PROCEDURES, PER SHIRA           *
+;***************************************************
+;
+	HEAD	ORD,4,LONG,'!'/256
+	.WORD	'CS','P'+EVEN,PFA-3
+SCSP:	.WORD	DOCOL,SPAT,CSP,STORE,SEMIS
+;
+	HEAD	ORD,6,LONG,'?'/256
+	.WORD	'ER','RO','R'+EVEN,SCSP-4
+QERROR:	.WORD	DOCOL,SWAP,ZBRAN
+	.WORD	QERR1-.,ERROR,BRAN
+	.WORD	QERR2-.
+QERR1:	.WORD	DROP
+QERR2:	.WORD	SEMIS
+;
+	HEAD	ORD,5,LONG,'?'/256
+	.WORD	'CO','MP'+ODD,QERROR-5
+QCOMP:	.WORD	DOCOL,STATE,AT,ZEQU
+	.WORD	LIT,0011,QERROR,SEMIS
+;
+	HEAD	ORD,5,LONG,'?'/256
+	.WORD	'EX','EC'+ODD,QCOMP-4
+QEXEC:	.WORD	DOCOL,STATE,AT
+	.WORD	LIT,0012,QERROR,SEMIS
+;
+	HEAD	ORD,6,LONG,'?'/256
+	.WORD	'PA','IR','S'+EVEN,QEXEC-4
+QPAIRS:	.WORD	DOCOL,SUB,LIT,0013,QERROR,SEMIS
+;
+	HEAD	ORD,4,LONG,'?'/256
+	.WORD	'CS','P'+EVEN,QPAIRS-5
+QCSP:	.WORD	DOCOL,SPAT,CSP,AT,SUB
+	.WORD	LIT,0014,QERROR,SEMIS
+;
+	HEAD	ORD,8,LONG,'?'/256
+	.WORD	'LO','AD','IN','G'+EVEN,QCSP-4
+QLOAD:	.WORD	DOCOL,BLK,AT,ZEQU
+	.WORD	LIT,0016,QERROR,SEMIS
+;
+;***************************************************
+;*          COMPILE, SMUDGE, HEX, DECIMAL          *
+;***************************************************
+;
+;   : COMPILE   ?COMP  R>  DUP  1+  >R  @  ,  ;
+;
+	HEAD	ORD,7,LONG,'C'/256
+	.WORD	'OM','PI','LE'+ODD,QLOAD-6
+COMPIL:	.WORD	DOCOL,QCOMP,FROMR,DUP
+	.WORD	ONEP,TOR,AT,COMMA,SEMIS
+;
+	HEAD	IMM,1,SHORT,'['/256
+	.WORD	COMPIL-5
+LBRAC:	.WORD	DOCOL,ZERO,STATE,STORE,SEMIS
+;
+	HEAD	ORD,1,SHORT,']'/256
+	.WORD	LBRAC-2
+RBRAC:	.WORD	DOCOL,LIT,00C0
+	.WORD	STATE,STORE,SEMIS
+;
+;   : SMUDGE   LATEST  BYTE  20  TOGGLE  ;
+;
+	HEAD	ORD,6,LONG,'S'/256
+	.WORD	'MU','DG','E'+EVEN,RBRAC-2
+SMUDGE:	.WORD	DOCOL,LATEST,BYTE
+	.WORD	LIT,0020,TOGGLE,SEMIS
+;
+	HEAD	ORD,3,LONG,'H'/256
+	.WORD	'EX'+ODD,SMUDGE-5
+HEX:	.WORD	DOCOL,LIT,0010,BASE,STORE,SEMIS
+;
+	HEAD	ORD,7,LONG,'D'/256
+	.WORD	'EC','IM','AL'+ODD,HEX-3
+DEC:	.WORD	DOCOL,LIT,0A,BASE,STORE,SEMIS
+;
+;***************************************************
+;*                      ;CODE                      *
+;***************************************************
+;
+	HEAD	ORD,7,LONG,'('/256
+	.WORD	';C','OD','E)'+ODD,DEC-5
+PSCODE:	.WORD	DOCOL,FROMR,LATEST
+	.WORD	PFA,CFA,STORE,SEMIS
+;
+;
+	HEAD	IMM,5,LONG,';'/256
+	.WORD	'CO','DE'+ODD,PSCODE-5
+SEMIC:	.WORD	DOCOL,QCSP,COMPIL,PSCODE
+	.WORD	LBRAC,SMUDGE,SEMIS
+;
+;***************************************************
+;*                  <BUILDS, DOES>                 *
+;***************************************************
+;
+	HEAD	ORD,7,LONG,'<'/256
+	.WORD	'BU','IL','DS'+ODD,SEMIC-4
+BUILDS:	.WORD	DOCOL,ZERO,CON,SEMIS
+;
+	HEAD	ORD,5,LONG,'D'/256
+	.WORD	'OE','S>'+ODD,BUILDS-5
+DOES:	.WORD	DOCOL,FROMR,LATEST,PFA,STORE,PSCODE
+;
+DODOES:	DSZ	RP		; EXTEND RETURN STACK
+	RCPY	IP,0
+	ST	0,@RP		; PUSH IP
+	LD	1,1(W)		; LOAD IP FROM PARAM
+	LI	0,2		; POINT BOTTOM
+	RADD	W,0		;  OF STACK
+	JMP	PUSH		;   TO PFA+1
+;
+;***************************************************
+;*                  TEXT OUTPUTS                   *
+;***************************************************
+;
+;   : COUNT   BYTE  DUP  1+  SWAP  C@  ;
+;
+	HEAD	ORD,5,LONG,'C'/256
+	.WORD	'OU','NT'+ODD,DOES-4
+COUNT:	.WORD	DOCOL,BYTE,DUP,ONEP,SWAP,CAT,SEMIS
+;
+	HEAD	ORD,4,LONG,'T'/256
+	.WORD	'YP','E'+EVEN,COUNT-4
+TYPE:	.WORD	DOCOL,DDUP,ZBRAN
+	.WORD	TYPE2-.,OVER,PLUS,SWAP,XDO
+TYPE1:	.WORD	I,CAT,EMIT,XLOOP
+	.WORD	TYPE1-.,BRAN
+	.WORD	TYPE3-.
+TYPE2:	.WORD	DROP
+TYPE3:	.WORD	SEMIS
+;
+	HEAD	ORD,9,LONG,'-'/256
+	.WORD	'TR','AI','LI','NG'+ODD,TYPE-4
+DTRAIL:	.WORD	DOCOL,DUP,ZERO,XDO
+DTRA1:	.WORD	OVER,OVER,PLUS,ONE,SUB
+	.WORD	CAT,BL,SUB,ZBRAN
+	.WORD	DTRA2-.,LEAVE,BRAN
+	.WORD	DTRA3-.
+DTRA2:	.WORD	ONE,SUB
+DTRA3:	.WORD	XLOOP
+	.WORD	DTRA1-.,SEMIS
+;
+;   : (.")   R  COUNT  DUP  CELL  1+
+;            R>  +  >R  TYPE  ;
+;
+	HEAD	ORD,4,LONG,'('/256
+	.WORD	'."',')'+EVEN,DTRAIL-6
+PDOTQ:	.WORD	DOCOL,R,COUNT,DUP,CELL,ONEP
+	.WORD	FROMR,PLUS,TOR,TYPE,SEMIS
+;
+;   : ."   22  STATE  @  IF  COMPILE  (.")  WORD
+;          HERE  BYTE  C@  CELL 1+  ALLOT  ELSE
+;	   WORD  HERE  COUNT  TYPE  ENDIF  ;
+;            IMMEDIATE
+;
+	     HEAD	IMM,2,LONG,'.'/256
+	     .WORD	'"'+EVEN,PDOTQ-4
+DOTQ:	     .WORD	DOCOL,LIT,'"'/256,STATE,AT,ZBRAN
+	     .WORD	DOTQ1-.,COMPIL,PDOTQ,WORD
+	     .WORD	HERE,BYTE,CAT,CELL,ONEP,ALLOT,BRAN
+	     .WORD	DOTQ2-.
+DOTQ1:	     .WORD	WORD,HERE,COUNT,TYPE
+DOTQ2:	     .WORD	SEMIS
+;
+	.LIST	PART=2
+;
+;***************************************************
+;*                  TERMINAL INPUT                 *
+;***************************************************
+;
+;   : EXPECT   OVER  +  OVER  DO  KEY  DUP
+;              07  +ORIGIN  @  =  IF  DROP  08
+;              OVER  I  =  DUP  R>  2  -  +  >R  -
+;              ELSE  DUP  0D  =
+;                IF  LEAVE  DROP  BL  0  ELSE  DUP
+;                ENDIF  I  C!  0  I  1+  C!
+;              ENDIF  EMIT  LOOP  DROP  ;
+;
+	HEAD	ORD,6,LONG,'E'/256
+	.WORD	'XP','EC','T'+EVEN,DOTQ-3
+EXPECT:	.WORD	DOCOL,OVER,PLUS,OVER,XDO
+EXPEC1:	.WORD	KEY,DUP,LIT,07,PORIG,AT,EQUAL,ZBRAN
+	.WORD	EXPEC2-.,DROP,LIT,08,OVER,I,EQUAL
+	.WORD	DUP,FROMR,TWO,SUB,PLUS,TOR,SUB,BRAN
+	.WORD	EXPEC5-.
+EXPEC2:	.WORD	DUP,LIT,0D,EQUAL,ZBRAN
+	.WORD	EXPEC3-.,LEAVE,DROP,BL,ZERO,BRAN
+	.WORD	EXPEC4-.
+EXPEC3:	.WORD	DUP
+EXPEC4:	.WORD	I,CSTORE,ZERO,I,ONEP,CSTORE
+EXPEC5:	.WORD	EMIT,XLOOP
+	.WORD	EXPEC1-.,DROP,SEMIS
+;
+;   : QUERY   TIB  @  BYTE  50  EXPECT  0  IN  !  ;
+;
+	HEAD	ORD,5,LONG,'Q'/256
+	.WORD	'UE','RY'+ODD,EXPECT-5
+QUERY:	.WORD	DOCOL,TIB,AT,BYTE,LIT,0050
+	.WORD	EXPECT,ZERO,IN,STORE,SEMIS
+;
+	HEAD	IMM,1,SHORT,00		; NULL
+	.WORD	QUERY-4
+NULL:	.WORD	DOCOL,BLK,AT,ZBRAN
+	.WORD	NULL2-.
+	.WORD	ONE,BLK,PSTORE,ZERO,IN,STORE
+	.WORD	BLK,AT,BSCR,MOD,ZEQU,ZBRAN
+	.WORD	NULL1-.,QEXEC,FROMR,DROP
+NULL1:	.WORD	BRAN
+	.WORD	NULL3-.
+NULL2:	.WORD	FROMR,DROP
+NULL3:	.WORD	SEMIS
+;
+;***************************************************
+;*      FILL, ERASE, BLANKS, HOLD, PAD, CMOVE      *
+;***************************************************
+;
+;        NOTE THAT THE NEXT THREE WORDS FILL
+;              16-BIT WORDS, NOT BYTES.
+;
+;   : FILL   SWAP  >R  OVER  !  DUP  1+
+;            R>  1  -  MOVE  ;
+;
+	HEAD	ORD,4,LONG,'F'/256
+	.WORD	'IL','L'+EVEN,NULL-2
+FILL:	.WORD	DOCOL,SWAP,TOR,OVER,STORE,DUP
+	.WORD	ONEP,FROMR,ONE,SUB,MOVE,SEMIS
+;
+	HEAD	ORD,5,LONG,'E'/256
+	.WORD	'RA','SE'+ODD,FILL-4
+ERASE:	.WORD	DOCOL,ZERO,FILL,SEMIS
+;
+;   : BLANKS   2020  FILL  ;
+;
+	HEAD	ORD,6,LONG,'B'/256
+	.WORD	'LA','NK','S'+EVEN,ERASE-4
+BLANKS:	.WORD	DOCOL,LIT,02020,FILL,SEMIS
+;
+	HEAD	ORD,4,LONG,'H'/256
+	.WORD	'OL','D'+EVEN,BLANKS-5
+HOLD:	.WORD	DOCOL,LIT,-1,HLD,PSTORE
+	.WORD	HLD,AT,CSTORE,SEMIS
+;
+;          NOTE THAT PAD IS A WORD ADDRESS.
+;
+;   : PAD   HERE  22  +  ;
+;
+	HEAD	ORD,3,LONG,'P'/256
+	.WORD	'AD'+ODD,HOLD-4
+PAD:	.WORD	DOCOL,HERE,LIT,0022,PLUS,SEMIS
+;
+;   : CMOVE   -DUP  IF  OVER  +  SWAP  DO
+;             DUP  C@  I  C!  1+  LOOP
+;             ELSE  DROP  ENDIF  DROP  ;
+;
+	HEAD	ORD,5,LONG,'C'/256
+	.WORD	'MO','VE'+ODD,PAD-3
+CMOVE:	.WORD	DOCOL,DDUP,ZBRAN
+	.WORD	CMOVE2-.,OVER,PLUS,SWAP,XDO
+CMOVE1:	.WORD	DUP,CAT,I,CSTORE,ONEP,XLOOP
+	.WORD	CMOVE1-.,BRAN
+	.WORD	CMOVE3-.
+CMOVE2:	.WORD	DROP
+CMOVE3:	.WORD	DROP,SEMIS
+;
+;***************************************************
+;*                       WORD
+;***************************************************
+;
+;   : WORD   BLK  @  IF  BLK  @  BLOCK  ELSE  TIB  @
+;            ENDIF  BYTE  IN  @  +  SWAP  ENCLOSE
+;            HERE  11  BLANKS  IN  +!  OVER  -  >R
+;            R  HERE  BYTE  C!  +  HERE  BYTE  1+
+;            R>  CMOVE  ;
+;
+	HEAD	ORD,4,LONG,'W'/256
+	.WORD	'OR','D'+EVEN,CMOVE-4
+WORD:	.WORD	DOCOL,BLK,AT,ZBRAN
+	.WORD	WORD1-.,BLK,AT,BLOCK,BRAN
+	.WORD	WORD2-.
+WORD1:	.WORD	TIB,AT
+WORD2:	.WORD	BYTE,IN,AT,PLUS,SWAP,ENCL
+	.WORD	HERE,LIT,17,BLANKS,IN,PSTORE
+	.WORD	OVER,SUB,TOR,R,HERE,BYTE,CSTORE
+	.WORD	PLUS,HERE,BYTE,ONEP
+	.WORD	FROMR,CMOVE,SEMIS
+;
+;***************************************************
+;*             (NUMBER), NUMBER, -FIND             *
+;***************************************************
+;
+	HEAD	ORD,8,LONG,'('/256
+	.WORD	'NU','MB','ER',')'+EVEN,WORD-4
+PNUMB:	.WORD	DOCOL
+PNUMB1:	.WORD	ONEP,DUP,TOR,CAT,BASE,AT,DIGIT,ZBRAN
+	.WORD	PNUMB3-.,SWAP,BASE,AT,USTAR
+	.WORD	DROP,ROT,BASE,AT,USTAR
+	.WORD	DPLUS,DPL,AT,ONEP,ZBRAN
+	.WORD	PNUMB2-.,ONE,DPL,PSTORE
+PNUMB2:	.WORD	FROMR,BRAN
+	.WORD	PNUMB1-.
+PNUMB3:	.WORD	FROMR,SEMIS
+;
+;   : NUMBER   BYTE  0  0  ROT  DUP  1+  C@
+;        2D  =  DUP  >R  +  -1
+;        BEGIN  DPL  !  (NUMBER)  DUP  C@  BL  -
+;        WHILE  DUP  C@  2E  -  0  ?ERROR  0  REPEAT
+;        DROP  R>  IF  DMINUS  ENDIF  ;
+;
+	HEAD	ORD,6,LONG,'N'/267
+	.WORD	'UM','BE','R'+EVEN,PNUMB-6
+NUMB:	.WORD	DOCOL,BYTE,ZERO,ZERO
+	.WORD	ROT,DUP,ONEP,CAT,LIT
+	.WORD	'-'/256,EQUAL,DUP,TOR,PLUS,LIT,-1
+NUMB1:	.WORD	DPL,STORE,PNUMB,DUP,CAT,BL,SUB,ZBRAN
+	.WORD	NUMB2-.,DUP,CAT,LIT,'.'/256
+	.WORD	SUB,ZERO,QERROR,ZERO,BRAN
+	.WORD	NUMB1-.
+NUMB2:	.WORD	DROP,FROMR,ZBRAN
+	.WORD	NUMB3-.,DMINUS
+NUMB3:	.WORD	SEMIS
+;
+	HEAD	ORD,5,LONG,'-'/256
+	.WORD	'FI','ND'+ODD,NUMB-5
+DFIND:	.WORD	DOCOL,BL,WORD,HERE,CONT,AT
+	.WORD	AT,PFIND,DUP,ZEQU,ZBRAN
+	.WORD	DFIND1-.,DROP,HERE,LATEST,PFIND
+DFIND1:	.WORD	SEMIS
+;
+;***************************************************
+;*                  ERROR HANDLER                  *
+;***************************************************
+;
+	.FORM	STRING,8,8
+;
+	HEAD	ORD,7,LONG,'('/256
+	.WORD	'AB','OR','T)'+ODD,DFIND-4
+PABORT:	.WORD	DOCOL,ABORT,SEMIS
+;
+	HEAD	ORD,5,LONG,'E'/256
+	.WORD	'RR','OR'+ODD,PABORT-5
+ERROR:	.WORD	DOCOL,WARN,AT,ZLESS,ZBRAN
+	.WORD	ERROR1-.,PABORT
+ERROR1:	.WORD	HERE,COUNT,TYPE,PDOTQ
+	STRING	4,' '/256
+	.ASCII	' ? '
+	.WORD	MESS,SPSTOR,IN,AT
+	.WORD	BLK,AT,QUIT,SEMIS
+;
+;   ID.   PAD  010  5F5F  FILL  DUP  PFA  LFA
+;         OVER  -  PAD  SWAP  MOVE  PAD  COUNT
+;         01F  AND  TYPE  SPACE  ;
+;
+	HEAD	ORD,3,LONG,'I'/256
+	.WORD	'D.'+ODD,ERROR-4
+IDDOT:	.WORD	DOCOL,PAD,LIT,0010,LIT,05F5F
+	.WORD	FILL,DUP,PFA,LFA,OVER,SUB
+	.WORD	PAD,SWAP,MOVE,PAD,CONT
+	.WORD	LIT,001F,AND,TYPE,SPACE,SEMIS
+;
+;***************************************************
+;*                      CREATE                     *
+;***************************************************
+;
+;   : CREATE   SP@  HERE  50  +  <  2  ?ERROR  -FIND
+;              IF  DROP  NFA  ID.  4  MESSAGE  SPACE
+;              ENDIF  HERE  DUP  BYTE  DUP  C@
+;              WIDTH  @  MIN  DUP  CELL  1+  ALLOT
+;              OVER  A0  TOGGLE  +  80  TOGGLE
+;              LATEST  ,  CURENT  @  !
+;              HERE  1+  ,  ;
+;
+	HEAD	ORD,6,LONG,'C'/256
+	.WORD	'RE','AT','E'+EVEN,IDDOT-3
+CREATE:	.WORD	DOCOL,SPAT,HERE,LIT,0050,PLUS
+	.WORD	LESS,TWO,QERROR,DFIND,ZBRAN
+	.WORD	CREAT1-.,DROP,NFA,IDDOT
+	.WORD	LIT,4,MESS,SPACE
+CREAT1:	.WORD	HERE,DUP,BYTE,DUP,CAT,WIDTH,AT
+	.WORD	MIN,DUP,CELL,ONEP,ALLOT,OVER
+	.WORD	LIT,00A0,TOGGLE,PLUS,LIT,0080
+	.WORD	TOGGLE,LATEST,COMMA,CURR,AT
+	.WORD	STORE,HERE,ONEP,COMMA,SEMIS
+;
+;***************************************************
+;*           [COMPILE], LITERAL, DLITERAL          *
+;***************************************************
+;
+	HEAD	IMM,9,LONG,'['/256
+	.WORD	'CO','MP','IL','E]'+ODD,CREATE-5
+BCOMP:	.WORD	DOCOL,DFIND,ZEQU,ZERO,QERROR
+	.WORD	DROP,CFA,COMMA,SEMIS
+;
+	HEAD	IMM,7,LONG,'L'/256
+	.WORD	'IT','ER','AL'+ODD,BCOMP-6
+LITER:	.WORD	DOCOL,STATE,AT,ZBRAN
+	.WORD	LITER1-.,COMPIL,LIT,COMMA
+LITER1:	.WORD	SEMIS
+;
+	HEAD	IMM,8,LONG,'D'/256
+	.WORD	'LI','TE','RA','L'+EVEN,LITER-5
+DLITER:	.WORD	DOCOL,STATE,AT,ZBRAN
+	.WORD	DLITE1-.,SWAP,LITER,LITER
+DLITE1:	.WORD	SEMIS
+;
+;   : ?STACK   S0  @  SP@  <  1  ?ERROR
+;              SP@  HERE  42  +  <  7  ?ERROR  ;
+;
+	HEAD	ORD,6,LONG,'?'/256
+	.WORD	'ST','AC','K'+EVEN,DLITER-6
+QSTACK:	.WORD	DOCOL,SZERO,AT,SPAT,LESS
+	.WORD	ONE,QERROR,SPAT,HERE,LIT,0042
+	.WORD	PLUS,LESS,LIT,7,QERROR,SEMIS
+;
+;***************************************************
+;*                    INTERPRET                    *
+;***************************************************
+;
+	HEAD	ORD,9,LONG,'I'/256
+	.WORD	'NT','ER','PR','ET'+ODD,QSTACK-5
+INTER:	.WORD	DOCOL
+INTER1:	.WORD	DFIND,ZBRAN
+	.WORD	INTER4-.,STATE,AT,LESS,ZBRAN
+	.WORD	INTER2-.,CFA,COMMA,BRAN
+	.WORD	INTER3-.
+INTER2:	.WORD	CFA,EXEC
+INTER3:	.WORD	QSTACK,BRAN
+	.WORD	INTER7-.
+INTER4:	.WORD	HERE,NUMB,DPL,AT,ONEP,ZBRAN
+	.WORD	INTER5-.,DLITER,BRAN
+	.WORD	INTER6-.
+INTER5:	.WORD	DROP,LITER
+INTER6:	.WORD	QSTACK
+INTER7:	.WORD	BRAN
+	.WORD	INTER1-.,SEMIS
+;
+;***************************************************
+;*   IMMEDIATE, VOCABULARY, DEFINITIONS, FORTH, (  *
+;***************************************************
+;
+;   : IMMEDIATE   LATEST  BYTE  40  TOGGLE  ;
+;
+	HEAD	ORD,9,LONG,'I'/256
+	.WORD	'MM','ED','IA','TE'+ODD,INTER-6
+IMMED:	.WORD	DOCOL,LATEST,BYTE
+	.WORD	LIT,0040,TOGGLE,SEMIS
+;
+;   : VOCABULARY   <BUILDS  81A0  ,  CURRENT  @
+;         CFA  ,  HERE  VOC-LINK  @  ,  VOC-LINK  !
+;         DOES>  1+  CONTEXT  !  ;
+;
+	HEAD	ORD,10,LONG,'V'/256
+	.WORD	'OC','AB','UL','AR','Y'+EVEN,IMMED-6
+VOCAB:	.WORD	DOCOL,BUILDS,LIT,081A0,COMMA
+	.WORD	CURR,AT,CFA,COMMA,HERE,VOCL
+	.WORD	AT,COMMA,VOCL,STORE,DOES
+DOVOC:	.WORD	ONEP,CONT,STORE,SEMIS
+;
+	HEAD	IMM,5,LONG,'F'/256
+	.WORD	'OR','TH'+ODD,VOCAB-7
+FORTH:	.WORD	DODOES,DOVOC,081A0,TASK-4,0
+;
+	HEAD	ORD,11,LONG,'D'/256
+	.WORD	'EF','IN','IT','IO','NS'+ODD,FORTH-4
+DEFIN:	.WORD	DOCOL,CONT,AT,CURR,STORE,SEMIS
+;
+	HEAD	IMM,1,SHORT,'('/256
+	.WORD	DEFIN-7
+PAREN:	.WORD	DOCOL,LIT,')'/256,WORD,SEMIS
+;
+;***************************************************
+;*                   QUIT, ABORT                   *
+;***************************************************
+;
+	HEAD	ORD,4,LONG,'Q'/256
+	.WORD	'UI','T'+EVEN,PAREN-2
+QUIT:	.WORD	DOCOL,ZERO,BLK,STORE,LBRAC
+QUIT1:	.WORD	RPSTOR,CR,QUERY,INTER
+	.WORD	STATE,AT,ZEQU,ZBRAN
+	.WORD	QUIT2-.,PDOTQ
+	STRING	3,' '/256
+	.ASCII	'OK'
+QUIT2:	.WORD	BRAN
+	.WORD	QUIT1-.,SEMIS
+;
+;   : ABORT   SP!  DECIMAL  DRO  CR
+;             ." PACE FORTH  V 4.0"  [COMPILE]
+;             FORTH  DEFINITIONS  QUIT  ;
+;
+	HEAD	ORD,5,LONG,'A'/256
+	.WORD	'BO','RT'+ODD,QUIT-4
+ABORT:	.WORD	DOCOL,SPSTOR,DEC,DRONE,CR,PDOTQ
+	STRING	17,'P'/256
+	.ASCII	'ACE FORTH  V 4.0'
+	.WORD	FORTH,DEFIN,QUIT,SEMIS
+;
+;***************************************************
+;*                    COLD START                   *
+;***************************************************
+;
+	HEAD	ORD,4,LONG,'C'/256
+	.WORD	'OL','D'+EVEN,ABORT-4
+COLD:	.WORD	.+1
+CENT:	JSR	INIT		; (INSTALL. DEPEND.)
+	LD	X,ORGPTR	; PRT TO STARTUP LITS
+	LD	0,06(X)		; INITIALIZE
+	ST	0,FORTH+3	;  FORTH VOCABULARY
+	LI	1,08		; INIT 8 USER VARS
+	JMP	LDUP
+WENT:	LI	1,05		; INIT 5 USER VARS
+	LD	X,ORGPTR	; PTR TO STARTUP LITS
+LDUP:	LD	Y,08(X)		; INITIALIZE
+	ST	Y,UP		;  USER POINTER
+LDUVS:	LD	0,09(X)		; MOVE FROM LITERAL
+	ST	0,03(Y)		;  AREA TO USER AREA
+	AISZ	X,1
+	AISZ	Y,1
+	AISZ	1,-1
+	JMP	LDUVS
+	LD	IP,IP0		; POINT IP TO ABORT
+	JMP	@START		; START AT RP!
+START:	.WORD	RPSTOR+1
+IP0:	.WORD	ABORT+1
+ORGPTR:	.WORD	ORIG		; START OF LITERALS
+;
+;***************************************************
+;*                  MATH UTILITY                   *
+;***************************************************
+;
+	HEAD	ORD,4,LONG,'S'/256
+	.WORD	'->','D'+EVEN,COLD-4
+STOD:	.WORD	.+1
+	LI	0,0
+	SKG	0,0(SP)
+	JMP	PUSH
+	LI	0,-1
+	JMP	PUSH
+;
+	HEAD	ORD,2,LONG,'+'/256
+	.WORD	'-'+EVEN,STOD-4
+PMI:	.WORD	DOCOL,ZLESS,ZBRAN
+	.WORD	PMI1-.,MINUS
+PMI1:	.WORD	SEMIS
+;
+	HEAD	ORD,3,LONG,'D'/256
+	.WORD	'+-'+ODD,PMI-3
+DPMI:	.WORD	DOCOL,ZLESS,ZBRAN
+	.WORD	DPMI1-.,DMINUS
+DPMI1:	.WORD	SEMIS
+;
+	HEAD	ORD,3,LONG,'A'/256
+	.WORD	'BS'+ODD,DPMI-3
+ABS:	.WORD	DOCOL,DUP,PMI,SEMIS
+;
+	HEAD	ORD,4,LONG,'D'/256
+	.WORD	'AB','S'+EVEN,ABS-3
+DABS:	.WORD	DOCOL,DUP,DPMI,SEMIS
+;
+	HEAD	ORD,3,LONG,'M'/256
+	.WORD	'IN'+ODD,DABS-4
+MIN:	.WORD	.+1
+	LD	0,0(SP)		; GET BOTTOM
+	SKG	0,1(SP)		; COMPARE WITH SECOND
+	JMP	BIN		; IF BOTTOM <= SECOND
+	JMP	POP		; IF BOTTOM > SECOND
+;
+	HEAD	ORD,3,LONG,'M'/256
+	.WORD	'AX'+ODD,MIN-3
+MAX:	.WORD	.+1
+	LD	0,0(SP)		; GET BOTTOM
+	SKG	0,1(SP)		; COMPARE WITH SECOND
+	JMP	POP		; IF BOTTOM <= SECOND
+	JMP	BIN		; IF BOTTOM > SECOND
+;
+;***************************************************
+;*                   SIGNED MATH                   *
+;***************************************************
+;
+	HEAD	ORD,2,LONG,'M'/256
+	.WORD	'*'+EVEN,MAX-3
+MSTAR:	.WORD	DOCOL,OVER,OVER,XOR,TOR
+	.WORD	ABS,SWAP,ABS,USTAR
+	.WORD	FROMR,DPMI,SEMIS
+;
+	HEAD	ORD,2,LONG,'M'/256
+	.WORD	'/'+EVEN,MSTAR-3
+MSLASH:	.WORD	DOCOL,OVER,TOR,TOR
+	.WORD	DABS,R,ABS,USLASH
+	.WORD	FROMR,R,XOR,PMI,SWAP
+	.WORD	FROMR,PMI,SWAP,SEMIS
+;
+	HEAD	ORD,1,SHORT,'*'/256
+	.WORD	MSLASH-3
+STAR:	.WORD	DOCOL,USTAR,DROP,SEMIS
+;
+	HEAD	ORD,4,LONG,'/'/256
+	.WORD	'MO','D'+EVEN,STAR-2
+SLMOD:	.WORD	DOCOL,TOR,STOD,FROMR,MSLASH,SEMIS
+;
+	HEAD	ORD,1,SHORT,'/'/256
+	.WORD	SLMOD-4
+SLASH:	.WORD	DOCOL,SLMOD,SWAP,DROP,SEMIS
+;
+	HEAD	ORD,3,LONG,'M'/256
+	.WORD	'OD'+ODD,SLASH-2
+MOD:	.WORD	DOCOL,SLMOD,DROP,SEMIS
+;
+	HEAD	ORD,5,LONG,'*'/256
+	.WORD	'/M','OD'+ODD,MOD-3
+SSMOD:	.WORD	DOCOL,TOR,MSTAR,FROMR,MSLASH,SEMIS
+;
+	HEAD	ORD,2,LONG,'*'/256
+	.WORD	'/'+EVEN,SSMOD-4
+SSLASH:	.WORD	DOCOL,SSMOD,SWAP,DROP,SEMIS
+;
+	HEAD	ORD,5,LONG,'M'/256
+	.WORD	'/M','OD'+ODD,SSLASH-3
+MSMOD:	.WORD	DOCOL,TOR,ZERO,R,USLASH,FROMR
+	.WORD	SWAP,TOR,USLASH,FROMR,SEMIS
+;
+;***************************************************
+;*            DISC UTILITY, GENERAL USE            *
+;***************************************************
+;
+	HEAD	ORD,3,LONG,'U'/256
+	.WORD	'SE'+ODD,MSMOD-4
+USE:	.WORD	DOVAR,BUFFS
+;
+	HEAD	ORD,4,LONG,'P'/256
+	.WORD	'RE','V'+EVEN,USE-3
+PREV:	.WORD	DOVAR,BUFFS
+;
+	HEAD	ORD,4,LONG,'+'/256
+	.WORD	'BU','F'+EVEN,PREV-4
+PBUF:	.WORD	DOCOL,LIT,BLKSIZ/2+2,PLUS
+	.WORD	DUP,LIMIT,EQUAL,ZBRAN
+	.WORD	PBUF1-.,DROP,FIRST
+PBUF1:	.WORD	DUP,PREV,AT,SUB,SEMIS
+;
+	HEAD	ORD,6,LONG,'U'/256
+	.WORD	'PD','AD','E'+EVEN,PBUF-4
+UPDATE:	.WORD	DOCOL,PREV,AT,AT,LIT,08000
+	.WORD	OR,PREV,AT,STORE,SEMIS
+;
+	HEAD	ORD,13,LONG,'E'/256
+	.WORD	'MP','TY','-B','UF'
+	.WORD	'FE','RS'+ODD,UPDATE-5
+MTBUF:	.WORD	DOCOL,FIRST,LIMIT
+	.WORD	OVER,SUB,ERASE,SEMIS
+;
+	HEAD	ORD,3,LONG,'D'/256
+	.WORD	'R1'+ODD,MTBUF-8
+DRONE:	.WORD	DOCOL,ZERO,OFFSET,STORE,SEMIS
+;
+	HEAD	ORD,3,LONG,'D'/256
+	.WORD	'R2'+ODD,DRONE-3
+DRTWO:	.WORD	DOCOL,LIT,2000
+	.WORD	OFFSET,STORE,SEMIS
+;
+;***************************************************
+;*                     BUFFER                      *
+;***************************************************
+;
+;   : BUFFER   USE  @  DUP  >R  BEGIN  +BUF  UNTIL
+;       USE  !  R  @  0<  IF  R  1+  R  @  7FFF
+;                             AND  0  R/W  ENDIF
+;       R  !  R  PREV  !  R>  1+  ;
+;
+	HEAD	ORD,6,LONG,'B'/256
+	.WORD	'UF','FE','R'+EVEN,DRTWO-3
+BUFFER:	.WORD	DOCOL,USE,AT,DUP,TOR
+BUFF1:	.WORD	PBUF,ZBRAN
+	.WORD	BUFF1-.,USE,STORE
+	.WORD	R,AT,ZLESS,ZBRAN
+	.WORD	BUFF2-.,R,ONEP,R,AT
+	.WORD	LIT,07FFF,AND,ZERO,RW
+BUFF2:	.WORD	R,STORE,R,PREV,STORE
+	.WORD	FROMR,ONEP,SEMIS
+;
+;***************************************************
+;*                      BLOCK                      *
+;***************************************************
+;
+;   : BLOCK   OFFSET  @  +  >R
+;       PREV  @  DUP  @  R  -  DUP  +
+;       IF  BEGIN  +BUF  0=
+;           IF  DROP  R  BUFFER
+;           DUP  R  1  R/W  1  -  ENDIF
+;           DUP  @  R  -  DUP  +  0=  UNTIL
+;       DUP  PREV  !  ENDIF  R>  DROP  1+  ;
+;
+	HEAD	ORD,5,LONG,'B'/256
+	.WORD	'LO','CK'+ODD,BUFFER-5
+BLOCK:	.WORD	DOCOL,OFFSET,AT,PLUS,TOR
+	.WORD	PREV,AT,DUP,AT,R
+	.WORD	SUB,DUP,PLUS,ZBRAN
+	.WORD	BLOCK3-.
+BLOCK1:	.WORD	PBUF,ZEQU,ZBRAN
+	.WORD	BLOCK2-.,DROP,R,BUFFER
+	.WORD	DUP,R,ONE,RW,ONE,SUB
+BLOCK2:	.WORD	DUP,AT,R,SUB,DUP
+	.WORD	PLUS,ZEQU,ZBRAN
+	.WORD	BLOCK1-.,DUP,PREV,STORE
+BLOCK3:	.WORD	FROMR,DROP,ONEP,SEMIS
+;
+;***************************************************
+;*              TEXT OUTPUT FORMATTING             *
+;***************************************************
+;
+;   : (LINE)   >R  40  B/BUF  */MOD  R>  B/SCR  *
+;              +  BLOCK  BYTE  +  40  ;
+;
+	HEAD	ORD,6,LONG,'('/256
+	.WORD	'LI','NE',')'+EVEN,BLOCK-4
+PLINE:	.WORD	DOCOL,TOR,LIT,64,BBUF,SSMOD
+	.WORD	FROMR,BSCR,STAR,PLUS,BLOCK
+	.WORD	BYTE,PLUS,LIT,64,SEMIS
+;
+	HEAD	ORD,5,LONG,'.'/256
+	.WORD	'LI','NE'+ODD,PLINE-5
+DLINE:	.WORD	DOCOL,PLINE,DTRAIL,TYPE,SEMIS
+;
+	HEAD	ORD,7,LONG,'M'/256
+	.WORD	'ES','SA','GE'+ODD,DLINE-4
+MESS:	.WORD	DOCOL,WARN,AT,ZBRAN
+	.WORD	MESS2-.,DDUP,ZBRAN
+	.WORD	MESS1-.,LIT,4,OFFSET,AT
+	.WORD	BSCR,SLASH,SUB,DLINE
+MESS1:	.WORD	BRAN
+	.WORD	MESS3-.
+MESS2:	.WORD	PDOTQ
+	STRING	6,'M'/256
+	.ASCII	'SG , '
+	.WORD	DOT
+MESS3:	.WORD	SEMIS
+;
+;***************************************************
+;*                    LOAD, -->                    *
+;***************************************************
+;
+	HEAD	ORD,4,LONG,'L'/256
+	.WORD	'OA','D'+EVEN,MESS-5
+LOAD:	.WORD	DOCOL,BLK,AT,TOR,IN,AT,TOR
+	.WORD	ZERO,IN,STORE,BSCR,STAR,BLK,STORE
+	.WORD	INTER,FROMR,IN,STORE
+	.WORD	FROMR,BLK,STORE,SEMIS
+;
+	HEAD	IMM,3,LONG,'-'/256
+	.WORD	'->'+ODD,LOAD-4
+ARROW:	.WORD	DOCOL,QLOAD,ZERO,IN,STORE
+	.WORD	BSCR,BLK,AT,OVER,MOD
+	.WORD	SUB,BLK,PSTORE,SEMIS
+;
+;***************************************************
+;*       INSTALLATION-DEPENDENT TERMINAL I-O       *
+;***************************************************
+;
+PEMIT:	LI	0,007F
+	AND	0,0(SP)		; CLEAR PARITY BIT
+	JSR	PUTC
+	JMP	POP
+;
+PKEY:	JSR	GETC
+	JMP	PUSH
+;
+PQTERM:	LI	0,0
+	JSR	INTEST
+	LI	0,1		; IF INPUT
+	JMP	PUSH
+;
+PCR:	LI	0,0D
+	JSR	PUTC
+	JMP	NEXT
+;
+;***************************************************
+;*                   R/W FOR RAM                   *
+;***************************************************
+;
+;  THESE THREE WORDS SIMULATE MASS STORAGE BY
+;  READING FROM AND WRITING TO MAIN MEMORY.
+;  HI AND LO ARE CONSTANTS CONTAINING THE STARTING
+;  ADDRESSES OF THE FIRST AND LAST BLOCKS. EACH
+;  BLOCK CONTAINS B/BUF BYTES PACKED TWO PER WORD.
+;
+;  IF MASS MEMORY IS AVAILABIE, R/W SHOULD BE
+;  REPLACED BY INSTALLATION-SPECIFIC I/O DRIVERS.
+;
+	HEAD	ORD,2,LONG,'H'/256
+	.WORD	'I'+EVEN,ARROW-3
+HI:	.WORD	DOCON,HIBLK
+;
+	HEAD	ORD,2,LONG,'L'/256
+	.WORD	'0'+EVEN,HI-3
+LO:	.WORD	DOCON,LOBLK
+;
+;   : R/W   >R  DUP  0<  6  ?ERROR  ( BLOCK, < 0 ? )
+;           B/BUF  CELL  *  LO  +   ( FWA OF BLOCK )
+;           DUP  HI  >  6  ?ERROR     ( TOO HIGH ? )
+;           R>  IF  SWAP  ENDIF     ( TO OR FROM ? )
+;           B/BUF  CELL  MOVE  ;   ( TRANSFER DATA )
+;
+	HEAD	ORD,3,LONG,'R'/256
+	.WORD	'/W'+ODD,LO-3
+RW:	.WORD	DOCOL,TOR,DUP,ZLESS
+	.WORD	LIT,6,QERROR,BBUF,CELL
+	.WORD	STAR,LO,PLUS,DUP,HI,GREAT
+	.WORD	LIT,6,QERROR,FROMR,ZBRAN
+	.WORD	RW1-.,SWAP
+RW1:	.WORD	BBUF,CELL,MOVE,SEMIS
+;
+;***************************************************
+;*                    ', FORGET                    *
+;***************************************************
+;
+	HEAD	IMM,1,SHORT,''''/256
+	.WORD	RW-3
+TICK:	.WORD	DOCOL,DFIND,ZEQU,ZERO
+	.WORD	QERROR,DROP,LITER,SEMIS
+;
+;*************************************(((((((((*****
+;   : FORGET   CURRENT  @  CONTEXT  @   ( IS VOCAB )
+;        -  18  ?ERROR           ( NON-AMBIGUOUS ? )
+;        [COMPILE]  '  NFA  ( HD OF WORD TO FORGET )
+;        DUP  FENCE  @  <  15  ?ERROR  ( CMP FENCE )
+;        >R  VOC-LINK  @  ( START WITH LATEST VOCAB)
+;        BEGIN  R  OVER  <  ( FORGET ENTIRE VOCAB? )
+;        WHILE  [COMPILE]  FORTH  DEFINITIONS
+;               @  DUP  VOC-LINK !  ( UNLINK VOCAB )
+;        REPEAT
+;        BEGIN  DUP  2  -  ( START AT PHANTOM NAME )
+;               BEGIN  PFA  LFA  @  ( HEAD OF WORD )
+;                      DUP R  <  ( FORGETTING IT ? )
+;               UNTIL
+;               OVER  1  -  !  ( NEW HEAD OF VOCAB )
+;               @  -DUP  0=  ( END OF VOCAB LIST ? )
+;        UNTIL
+;        R>  DP  !  ;     ( NEW DICTIONARY POINTER )
+;
+	HEAD	ORD,6,LONG,'F'/256
+	.WORD	'OR','GE','T'+EVEN,TICK-2
+FORGET:	.WORD	DOCOL,CURR,AT,CONT,AT
+	.WORD	SUB,LIT,0018,QERROR
+	.WORD	TICK,NFA,DUP,FENCE,AT,LESS
+	.WORD	LIT,0015,QERROR,TOR,VOCL,AT
+FORG1:	.WORD	R,OVER,LESS,ZBRAN
+	.WORD	FORG2-.,FORTH,DEFIN
+	.WORD	AT,DUP,VOCL,STORE,BRAN
+	.WORD	FORG1-.
+FORG2:	.WORD	DUP,TWO,SUB
+FORG3:	.WORD	PFA,LFA,AT,DUP,R,LESS,ZBRAN
+	.WORD	FORG3-.,OVER,ONE,SUB,STORE
+	.WORD	AT,DDUP,ZEQU,ZBRAN
+	.WORD	FORG2-.,FROMR,DP,STORE,SEMIS
+;
+;***************************************************
+;*        CONDITIONAL COMPILER, PER SHIRA          *
+;***************************************************
+;
+	HEAD	ORD,4,LONG,'B'/256
+	.WORD	'AC','K'+EVEN,FORGET-5
+BACK:	.WORD	DOCOL,HERE,SUB,COMMA,SEMIS
+;
+	HEAD	IMM,5,LONG,'B'/256
+	.WORD	'EG','IN'+ODD,BACK-4
+BEGIN:	.WORD	DOCOL,QCOMP,HERE,ONE,SEMIS
+;
+	HEAD	IMM,5,LONG,'E'/256
+	.WORD	'ND','IF'+ODD,BEGIN-4
+ENDIF:	.WORD	DOCOL,QCOMP,TWO,QPAIRS,HERE
+	.WORD	OVER,SUB,SWAP,STORE,SEMIS
+;
+	HEAD	IMM,LONG,'T'/256
+	.WORD	'HE','N'+EVEN,ENDIF-4
+THEN:	.WORD	DOCOL,ENDIF,SEMIS
+;
+	HEAD	IMM,2,LONG,'D'/256
+	.WORD	'O'+EVEN,THEN-4
+DO:	.WORD	DOCOL,COMPIL,XDO
+	.WORD	HERE,THREE,SEMIS
+;
+	HEAD	IMM,4,LONG,'L'/256
+	.WORD	'OO','P'+EVEN,DO-3
+LOOP:	.WORD	DOCOL,THREE,QPAIRS,COMPIL
+	.WORD	XLOOP,BACK,SEMIS
+;
+	HEAD	IMM,5,LONG,'+'/256
+	.WORD	'LO','OP'+ODD,LOOP-4
+PLOOP:	.WORD	DOCOL,THREE,QPAIRS,COMPIL
+	.WORD	XPLOOP,BACK,SEMIS
+;
+	HEAD	IMM,5,LONG,'U'/256
+	.WORD	'NT','IL'+ODD,PLOOP-4
+UNTIL:	.WORD	DOCOL,ONE,QPAIRS,COMPIL
+	.WORD	ZBRAN,BACK,SEMIS
+;
+	HEAD	IMM,3,LONG,'E'/256
+	.WORD	'ND'+ODD,UNTIL-4
+END:	.WORD	DOCOL,UNTIL,SEMIS
+;
+	HEAD	IMM,5,LONG,'A'/256
+	.WORD	'GA','IN'+ODD,END-3
+AGAIN:	.WORD	DOCOL,ONE,QPAIRS,COMPIL
+	.WORD	BRAN,BACK,SEMIS
+;
+	HEAD	IMM,6,LONG,'R'/256
+	.WORD	'EP','EA','T'+EVEN,AGAIN-4
+REPEAT:	.WORD	DOCOL,TOR,TOR,AGAIN,FROMR
+	.WORD	FROMR,TWO,SUB,ENDIF,SEMIS
+;
+	HEAD	IMM,2,LONG,'I'/256
+	.WORD	'F'+EVEN,REPEAT-5
+IF:	.WORD	DOCOL,COMPIL,ZBRAN,HERE
+	.WORD	ZERO,COMMA,TWO,SEMIS
+;
+	HEAD	IMM,4,LONG,'E'/256
+	.WORD	'LS','E'+EVEN,IF-3
+ELSE:	.WORD	DOCOL,TWO,QPAIRS,COMPIL
+	.WORD	BRAN,HERE,ZERO,COMMA
+	.WORD	SWAP,TWO,ENDIF,TWO,SEMIS
+;
+	HEAD	IMM,5,LONG,'W'/256
+	.WORD	'HI','LE'+ODD,ELSE-4
+WHILE:	.WORD	DOCOL,IF,TWOP,SEMIS
+;
+;***************************************************
+;*               NUMERIC PRIMITIVES                *
+;***************************************************
+;
+	HEAD	ORD,6,LONG,'S'/256
+	.WORD	'PA','CE','S'+EVEN,WHILE-4
+SPACES:	.WORD	DOCOL,ZERO,MAX,DDUP,ZBRAN
+	.WORD	SPACE2-.,ZERO,XDO
+SPACE1:	.WORD	SPACE,XLOOP
+	.WORD	SPACE1-.
+SPACE2:	.WORD	SEMIS
+;
+;   : <,   PAD  BYTE  HLD  !  ;
+;
+	HEAD	ORD,2,LONG,'<'/256
+	.WORD	','+EVEN,SPACES-5
+BDIGS:	.WORD	DOCOL,PAD,BYTE,HLD,STORE,SEMIS
+;
+;   : ,>   DROP  DROP  HLD  @
+;          PAD  BYTE  OVER  +  ;
+;
+	HEAD	ORD,2,LONG,','/256
+	.WORD	'>'+EVEN,BDIGS-3
+EDIGS:	.WORD	DOCOL,DROP,DROP,HLD,AT
+	.WORD	PAD,BYTE,OVER,SUB,SEMIS
+;
+	HEAD	ORD,4,LONG,'S'/256
+	.WORD	'IG','N'+EVEN,EDIGS-3
+SIGN:	.WORD	DOCOL,ROT,ZLESS,ZBRAN
+	.WORD	SIGN1-.,LIT,'-'/256,HOLD
+SIGN1:	.WORD	SEMIS
+;
+	HEAD	ORD,1,SHORT,','/256
+	.WORD	SIGN-4
+DIG:	.WORD	DOCOL,BASE,AT,MSMOD,ROT
+	.WORD	LIT,9,OVER,LESS,ZBRAN
+	.WORD	DIG1-.,LIT,7,PLUS
+DIG1:	.WORD	LIT,0030,PLUS,HOLD,SEMIS
+;
+	HEAD	ORD,2,LONG,','/256
+	.WORD	'S'+EVEN,DIG-2
+DIGS:	.WORD	DOCOL
+DIGS1:	.WORD	DIG,OVER,OVER,OR,ZEQU,ZBRAN
+	.WORD	DIGS1-.,SEMIS
+;
+;***************************************************
+;*                OUTPUT OPERATORS                 *
+;***************************************************
+;
+	HEAD	ORD,3,LONG,'D'/256
+	.WORD	'.R'+ODD,DIGS-3
+DDOTR:	.WORD	DOCOL,TOR,SWAP,OVER,DABS
+	.WORD	BDIGS,DIGS,SIGN,EDIGS,FROMR
+	.WORD	OVER,SUB,SPACES,TYPE,SEMIS
+;
+	HEAD	ORD,2,LONG,'.'/256
+	.WORD	'R'+EVEN,DDOTR-3
+DOTR:	.WORD	DOCOL,TOR,STOD,FROMR,DDOTR,SEMIS
+;
+	HEAD	ORD,2,LONG,'D'/256
+	.WORD	'.'+EVEN,DOTR-3
+DDOT:	.WORD	DOCOL,ZERO,DDOTR,SPACE,SEMIS
+;
+	HEAD	ORD,1,SHORT,'.'/256
+	.WORD	DDOT-3
+DOT:	.WORD	DOCOL,STOD,DDOT,SEMIS
+;
+	HEAD	ORD,1,SHORT,'?'/256
+	.WORD	DOT-2
+QUES:	.WORD	DOCOL,AT,DOT,SEMIS
+;
+	HEAD	ORD,2,LONG,'U'/256
+	.WORD	'.'+EVEN,QUES-2
+UDOT:	.WORD	DOCOL,ZERO,DDOT,SEMIS
+;
+;***************************************************
+;*              PROGRAM DOCUMENTATION              *
+;***************************************************
+;
+	HEAD	ORD,4,LONG,'L'/256
+	.WORD	'IS','T'+EVEN,UDOT-3
+LIST:	.WORD	DOCOL,CR,DUP,SCR,STORE,PDOTQ
+	STRING	6,'S'/256
+	.ASCII	'CR , '
+	.WORD	DOT,LIT,16,ZERO,XDO
+LIST1:	.WORD	CR,I,ZERO,THREE,DDOTR,SPACE
+	.WORD	I,SCR,AT,DLINE,XLOOP
+	.WORD	LIST1-.,CR,SEMIS
+;
+	HEAD	ORD,5,LONG,'I'/256
+	.WORD	'ND','EX'+ODD,LIST-4
+INDEX:	.WORD	DOCOL,LIT,000C,EMIT
+	.WORD	CR,ONEP,SWAP,XDO
+INDEX1:	.WORD	CR,I,ZERO,THREE,DDOTR,SPACE
+	.WORD	ZERO,I,DLINE,QTERM,ZBRAN
+	.WORD	INDEX2-.,LEAVE
+INDEX2:	.WORD	XLOOP
+	.WORD	INDEX1-.,SEMIS
+;
+	HEAD	ORD,5,LONG,'T'/256
+	.WORD	'RI','AD'+ODD,INDEX-4
+TRIAD:	.WORD	DOCOL,LIT,000C,EMIT,THREE
+	.WORD	SLASH,THREE,STAR,THREE
+	.WORD	OVER,PLUS,SWAP,XDO
+TRIAD1:	.WORD	CR,I,LIST,XLOOP
+	.WORD	TRIAD1-.,CR,LIT,000F
+	.WORD	MESS,CR,SEMIS
+;
+;***************************************************
+;*                      TOOLS                      *
+;***************************************************
+;
+	HEAD	ORD,5,LONG,'V'/256
+	.WORD	'LI','ST'+ODD,TRIAD-4
+VLIST:	.WORD	DOCOL,LIT,0080,OUT,STORE
+	.WORD	CONT,AT,AT
+VLIST1:	.WORD	OUT,AT,LIT,0040,GREAT,ZBRAN
+	.WORD	VLIST2-.,CR,ZERO,OUT,STORE
+VLIST2:	.WORD	DUP,IDDOT,SPACE,SPACE
+	.WORD	PFA,LFA,AT,DUP,ZEQU
+	.WORD	QTERM,OR,ZBRAN
+	.WORD	VLIST1-.,DROP,SEMIS
+;
+	HEAD	ORD,4,LONG,'T'/245
+	.WORD	'AS','K'+EVEN,VLIST-4
+TASK:	.WORD	DOCOL,SEMIS
+	.PAGE
+;
+FIN:	.END	CENT
