@@ -1,7 +1,7 @@
 /*
 Copyright 1995, 2004, 2008, 2009 Eric Smith <eric@brouhaha.com>
 All rights reserved.
-$Id: symtab.c 1094 2008-03-31 01:51:40Z eric $
+$Id: symtab.c,v 1.1 2009/05/10 00:23:51 eric Exp eric $
 */
 
 #include <stdbool.h>
@@ -10,7 +10,7 @@ $Id: symtab.c 1094 2008-03-31 01:51:40Z eric $
 #include <stdlib.h>
 #include <string.h>
 
-#include "pasm_types.h"
+#include "asm_types.h"
 #include "symtab.h"
 #include "util.h"
 

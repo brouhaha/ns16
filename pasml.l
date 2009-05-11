@@ -1,7 +1,7 @@
 /*
 Copyright 1995, 2003, 2004, 2006, 2007, 2008, 2009 Eric Smith <eric@brouhaha.com>
 All rights reserved.
-$Id: wasml.l 1112 2008-06-06 06:49:22Z eric $
+$Id: pasml.l,v 1.1 2009/05/10 00:23:51 eric Exp eric $
 */
 
 %option prefix="pasm_"
@@ -12,11 +12,11 @@ $Id: wasml.l 1112 2008-06-06 06:49:22Z eric $
 #include <stdint.h>
 #include <string.h>
 
-#include "pasm_types.h"
+#include "asm_types.h"
 #include "pasmy.h"
 #include "util.h"
 #include "symtab.h"
-#include "pasm.h"
+#include "asm.h"
 
 #undef YY_INPUT
 #define YY_INPUT(buf,result,max_size) \
