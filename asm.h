@@ -1,7 +1,7 @@
 /*
 Copyright 1995, 2004, 2005, 2006, 2007, 2008, 2009 Eric Smith <eric@brouhaha.com>
 All rights reserved.
-$Id$
+$Id: pasm.h,v 1.1 2009/05/10 00:23:51 eric Exp eric $
 */
 
 extern int pass;
@@ -99,12 +99,9 @@ int asm_warning (char *format, ...);
 
 /* lexers: */
 
-int pasm_lex     (void);
+//int pasm_lex     (void);
 
 
-/* parsers: */
-typedef int (parser_t)(void);
+/* parser, defined in iasmy.y and pasmy.y */
 
-extern parser_t *parser [1];
-
-int pasm_parse     (void);
+void parse     (void);

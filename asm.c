@@ -1,7 +1,7 @@
 /*
 Copyright 1995, 2004, 2005, 2006, 2007, 2008, 2009 Eric Smith <eric@brouhaha.com>
 All rights reserved.
-$Id$
+$Id: pasm.c,v 1.1 2009/05/10 00:23:51 eric Exp eric $
 */
 
 #include <stdarg.h>
@@ -12,15 +12,17 @@ $Id$
 #include <string.h>
 #include <unistd.h>
 
-#include "pasm_types.h"
+#include "asm_types.h"
 #include "symtab.h"
 #include "util.h"
-#include "pasm.h"
+#include "asm.h"
 
 
 void usage (FILE *f)
 {
-  fprintf (f, "pasm assembler - %s\n", program_release);
+  // $$$ need to put in correct program name, pasm or iasm,
+  // but don't get from argv [0]!
+  fprintf (f, "asm assembler - %s\n", program_release);
   fprintf (f, "Copyright 1995, 2003-2009 Eric Smith <eric@brouhaha.com>\n");
   fprintf (f, "\n");
   fprintf (f, "usage: %s [options...] sourcefile\n", progname);
@@ -28,12 +30,6 @@ void usage (FILE *f)
   fprintf (f, "   -o objfile\n");
   fprintf (f, "   -l listfile\n");
 }
-
-
-parser_t *parser [1] =
-  {
-    pasm_parse
-  };
 
 
 int pass;
@@ -415,7 +411,7 @@ static void parse_source_line (void)
 
   lineptr = & linebuf [0];
   parse_error = false;
-  pasm_parse ();
+  parse ();
   if (! parse_error)
     return;
 }

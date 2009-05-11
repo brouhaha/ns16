@@ -1,7 +1,7 @@
 /*
 Copyright 1995, 2004, 2005, 2006, 2007, 2008, 2009 Eric Smith <eric@brouhaha.com>
 All rights reserved.
-$Id$
+$Id: pasmy.y,v 1.1 2009/05/10 00:23:51 eric Exp eric $
 */
 
 %name-prefix="pasm_"
@@ -11,9 +11,9 @@ $Id$
 #include <stdint.h>
 #include <stdio.h>
 
-#include "pasm_types.h"
+#include "asm_types.h"
 #include "symtab.h"
-#include "pasm.h"
+#include "asm.h"
 
 void pasm_error (char *s);
 %}
@@ -366,4 +366,9 @@ ea_lit		: expr { if ($1 < 256)
 void pasm_error (char *s)
 {
   error ("%s\n", s);
+}
+
+void parse (void)
+{
+  pasm_parse ();
 }
