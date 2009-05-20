@@ -1,3 +1,5 @@
+import os.path
+
 env = Environment ()
 env.Append (CCFLAGS = ['-Wall', '-Wextra'])
 
@@ -26,9 +28,28 @@ iasm = env.Program (target = 'iasm',
 pasm = env.Program (target = 'pasm',
                     source = pasm_objs + asm_common_objs)
 
+def pasm_emitter_fn (target, source, env):
+    target.append (os.path.splitext (str (target [0])) [0] + '.lst')
+    env.Depends (target, pasm)
+    return (target, source)
+
+def pasm_generator_fn (source, target, env, for_signature):
+    return '%s %s -o %s -l %s' % (pasm [0].abspath, source [0], target [0], target [1])
+
+pasm_builder = env.Builder (generator = pasm_generator_fn,
+                            suffix = '.obj',
+                            src_suffix = '.asm',
+                            emitter = pasm_emitter_fn)
+
+env.Append (BUILDERS = { 'PASM': pasm_builder })
+
 psim = env.Program (target = 'psim',
                     source = psim_objs)
+
+figforth_pace = env.PASM (target = 'figforth_pace.obj',
+                          source = 'figforth_pace.asm')
 
 #env.Default (iasm);
 env.Default (pasm);
 env.Default (psim);
+env.Default (figforth_pace);
