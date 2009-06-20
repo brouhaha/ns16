@@ -76,7 +76,7 @@ def read_screen_from_text_file (tfn):
         buf += line
         line_num += 1
     tf.close ()
-    return buf
+    return pad_string_with_spaces (buf, chars_per_screen)
 
 
 def edit_text_file (fn):
