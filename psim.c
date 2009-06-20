@@ -1,6 +1,6 @@
 // Copyright 2009 Eric Smith <eric@brouhaha.com>
 // All rights reserved.
-// $Id$
+// $Id: psim.c,v 1.1 2009/05/19 17:36:15 eric Exp eric $
 
 #include <stdbool.h>
 #include <stdint.h>
@@ -8,6 +8,9 @@
 #include <stdlib.h>
 #include <termios.h>
 #include <unistd.h>
+
+char *block_fn = "figforth_blocks";
+FILE *block_f;
 
 FILE *trace_f = NULL;
 bool inst_trace = false;
@@ -979,9 +982,67 @@ int consoleInputCharacter (void)
 
 void consoleOutputCharacter (int c)
 {
-  if (c == '\r')
-    c = '\n';
+  //if (c == '\r')
+  //  c = '\n';
   fprintf (stdout, "%c", c);
+}
+
+int get_mem_byte (int addr)
+{
+  if (addr & 1)
+    return mem [addr >> 1] & 0xff;
+  else
+    return mem [addr >> 1] >> 8;
+}
+
+void put_mem_byte (int addr, int b)
+{
+  if (addr & 1)
+    mem [addr >> 1] = ((mem [addr >> 1]) & 0xff00) | (b & 0xff);
+  else
+    mem [addr >> 1] = ((mem [addr >> 1]) & 0x00ff) | ((b & 0xff) << 8);
+}
+
+// addr is word addr
+#define BLOCK_SIZE 128
+void block_io (int addr, int block, bool read)
+{
+  int baddr = addr << 1;
+  int count;
+  int b;
+  int new_pos;
+
+  //fprintf (stdout, "%sing block %d, addr %04x, byte addr %04x\n",
+  //	   (read ? "read" : "write"), block, addr, baddr);
+  if (block < 0)
+    return;  // error!
+
+  new_pos = block * BLOCK_SIZE;
+  //fprintf (stderr, "seeking to %d\n", new_pos);
+  if (fseek (block_f, new_pos, SEEK_SET) < 0)
+    {
+      fprintf (stderr, "error seeking to %d\n", new_pos);
+      return;
+    }
+  count = BLOCK_SIZE;
+  while (count--)
+    {
+      if (read)
+	{
+	  b = fgetc (block_f);
+	  if (b < 0)
+	    {
+	      fprintf (stderr, "end of file\n");
+	      return;
+	    }
+	  put_mem_byte (baddr++, b);
+	}
+      else
+	{
+	  b = get_mem_byte (baddr++);
+	  fputc (b, block_f);
+	}
+    }
 }
 
 void run (void)
@@ -989,6 +1050,13 @@ void run (void)
   int c;
 
   loadHexFile ("figforth_pace.obj");
+
+  block_f = fopen (block_fn, "r+b");
+  if (! block_f)
+    {
+      fprintf (stderr, "can't open block file '%s'\n", block_fn);
+      exit (2);
+    }
 	
   pc = 0x10;
   halt = false;
@@ -1016,6 +1084,11 @@ void run (void)
 	    pc = pull ();
 	  else
 	    pc = (pull () + 1) & WORD_MASK;
+	  break;
+	case 0x7eff:
+	  // blockio
+	  block_io (mem [ac [3] + 2], mem [ac [3] + 1], mem [ac [3]] != 0);
+	  pc = pull ();
 	  break;
 	default:
 	  executeInstruction ();
