@@ -1,6 +1,6 @@
 // Copyright 2009 Eric Smith <eric@brouhaha.com>
 // All rights reserved.
-// $Id: psim.c,v 1.1 2009/05/19 17:36:15 eric Exp eric $
+// $Id: psim.c,v 1.2 2009/06/20 21:30:21 eric Exp eric $
 
 #include <stdbool.h>
 #include <stdint.h>
@@ -1133,6 +1133,25 @@ void set_tty_raw (bool raw)
 
 int main (int argc, char *argv [])
 {
+  while (--argc)
+    {
+      argv++;
+      if (strcmp (argv [0], "-w") == 0)
+	{
+	  word_trace = true;
+	}
+      else if (strcmp (argv [0], "-i") == 0)
+	{
+	  inst_trace = true;
+	}
+      else
+	{
+	  sprintf (stderr, "unrecognized argument '%s'\n", argv [0]);
+	  exit (1);
+	}
+    }
+  if (word_trace || inst_trace)
+    trace_f = stdout;  // $$$
   get_tty_settings ();
   set_tty_raw (true);
   run ();
