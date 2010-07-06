@@ -1,7 +1,7 @@
 /*
 Copyright 1995, 2004, 2005, 2006, 2008 Eric Smith <eric@brouhaha.com>
 All rights reserved.
-$Id$
+$Id: util.c,v 1.1 2009/05/10 00:23:51 eric Exp $
 */
 
 #include <ctype.h>
@@ -184,7 +184,7 @@ char *strlncpy (char *dest, const char *src, size_t l, size_t n)
       dest [n] = '\0';
     }
   else
-     strlcpy (dest, src, l);
+     u_strlcpy (dest, src, l);
   return dest;
 }
 
@@ -195,7 +195,7 @@ char *max_strncat (char *dest, const char *src, size_t n)
   size_t len1 = strlen (dest);
 
   if (len1 < (n - 1))
-    strlcpy (dest + len1, src, (n - 1) - len1);
+    u_strlcpy (dest + len1, src, (n - 1) - len1);
   return dest;
 }
 
@@ -497,7 +497,7 @@ char *find_file_in_path_list (char *name, char *opt_suffix, char *path_list)
   char buf [PATH_MAX];
 
   // First look in the current directory, even if it's not in the path.
-  strlcpy (buf, name, sizeof (buf));
+  u_strlcpy (buf, name, sizeof (buf));
   if (file_exists (buf))
     goto found;
   if (opt_suffix)

@@ -1,11 +1,12 @@
 // Copyright 2009 Eric Smith <eric@brouhaha.com>
 // All rights reserved.
-// $Id: psim.c,v 1.2 2009/06/20 21:30:21 eric Exp eric $
+// $Id: psim.c,v 1.3 2009/08/10 18:25:56 eric Exp eric $
 
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <termios.h>
 #include <unistd.h>
 
@@ -1146,7 +1147,7 @@ int main (int argc, char *argv [])
 	}
       else
 	{
-	  sprintf (stderr, "unrecognized argument '%s'\n", argv [0]);
+	  fprintf (stderr, "unrecognized argument '%s'\n", argv [0]);
 	  exit (1);
 	}
     }
