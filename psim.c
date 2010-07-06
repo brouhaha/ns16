@@ -1,6 +1,6 @@
 // Copyright 2009 Eric Smith <eric@brouhaha.com>
 // All rights reserved.
-// $Id: psim.c,v 1.3 2009/08/10 18:25:56 eric Exp eric $
+// $Id: psim.c,v 1.4 2010/07/06 19:32:23 eric Exp eric $
 
 #include <stdbool.h>
 #include <stdint.h>
@@ -1046,6 +1046,15 @@ void block_io (int addr, int block, bool read)
     }
 }
 
+#define ABSTTY_BASE    0x7e00
+#define ABSTTY_SIZE    0x0100
+
+#define ABSTTY_GETC    0x7e3b
+#define ABSTTY_PUTC    0x7e44
+#define ABSTTY_INTEST  0x7ecc
+
+#define ABSTTY_BLOCKIO 0x7eff  // my own hack for disk I/O
+
 void run (void)
 {
   int c;
@@ -1063,37 +1072,39 @@ void run (void)
   halt = false;
   while (! halt)
     {
-      switch (pc)
+      if ((pc >= ABSTTY_BASE) &&
+	  (pc <= ABSTTY_BASE + ABSTTY_SIZE))
 	{
-	case 0x7e3b:
-	  // getc
-	  ac [0] = consoleInputCharacter ();
-	  pc = pull ();
-	  break;
-	case 0x7e44:
-	  // putc
-	  c = ac [0] & 0x7f;
-	  consoleOutputCharacter (c);
-	  if (c == 0x0d)
-	    consoleOutputCharacter (0x0a);
-	  pc = pull ();
-	  break;
-	case 0x7ecc:
-	  // intest
-	  // return with skip if no input ready
-	  if (consoleInputAvail ())
-	    pc = pull ();
-	  else
-	    pc = (pull () + 1) & WORD_MASK;
-	  break;
-	case 0x7eff:
-	  // blockio
-	  block_io (mem [ac [3] + 2], mem [ac [3] + 1], mem [ac [3]] != 0);
-	  pc = pull ();
-	  break;
-	default:
-	  executeInstruction ();
+	  switch (pc)
+	    {
+	    case ABSTTY_GETC:
+	      ac [0] = consoleInputCharacter ();
+	      pc = pull ();
+	      break;
+	    case ABSTTY_PUTC:
+	      c = ac [0] & 0x7f;
+	      consoleOutputCharacter (c);
+	      if (c == 0x0d)
+		consoleOutputCharacter (0x0a);
+	      pc = pull ();
+	      break;
+	    case ABSTTY_INTEST:
+	      // return with skip if no input ready
+	      if (consoleInputAvail ())
+		pc = pull ();
+	      else
+		pc = (pull () + 1) & WORD_MASK;
+	      break;
+	    case ABSTTY_BLOCKIO:
+	      block_io (mem [ac [3] + 2], mem [ac [3] + 1], mem [ac [3]] != 0);
+	      pc = pull ();
+	      break;
+	    default:
+	      halt = true;
+	    }
 	}
+      else
+	executeInstruction ();
     }
   printf ("halted at %04x\n", pc);
 }

@@ -1,6 +1,6 @@
 // Copyright 2009 Eric Smith <eric@brouhaha.com>
 // All rights reserved.
-// $Id: psim.c,v 1.1 2009/05/19 17:36:15 eric Exp eric $
+// $Id: isim.c,v 1.1 2009/05/25 01:14:53 eric Exp eric $
 
 #include <stdbool.h>
 #include <stdint.h>
@@ -1179,7 +1179,6 @@ void run (void)
 		pc = (pull () + 1) & WORD_MASK;
 	      continue;
 	    case ABSTTY_BLOCKIO:
-	      // blockio
 	      block_io (mem [ac [3] + 2], mem [ac [3] + 1], mem [ac [3]] != 0);
 	      pc = pull ();
 	      continue;
