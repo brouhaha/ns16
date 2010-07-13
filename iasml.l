@@ -1,7 +1,7 @@
 /*
 Copyright 1995, 2003, 2004, 2006, 2007, 2008, 2009 Eric Smith <eric@brouhaha.com>
 All rights reserved.
-$Id: iasml.l,v 1.1 2009/05/10 00:23:51 eric Exp eric $
+$Id: iasml.l,v 1.1 2009/05/24 18:52:48 eric Exp eric $
 */
 
 %option prefix="iasm_"
@@ -83,7 +83,6 @@ ld         { return LD; }
 li         { return LI; }
 jmp        { return JMP; }
 jsr        { return JSR; }
-jsri       { return JSRI; }
 or         { return OR; }
 pflg       { return PFLG; }
 pull       { return PULL; }
@@ -110,6 +109,26 @@ skne       { return SKNE; }
 st         { return ST; }
 sub        { return SUB; }
 xchrs      { return XCHRS; }
+
+clrbit     { return CLRBIT; }
+clrst      { return CLRST; }
+cmpbit     { return CMPBIT; }
+dadd       { return DADD; }
+div        { return DIV; }
+dsub       { return DSUB; }
+iscan      { return ISCAN; }
+jint       { return JINT; }
+jmpp       { return JMPP; }
+jsri       { return JSRI; }
+jsrp       { return JSRP; }
+ldb	   { return LDB; }
+mpy        { return MPY; }
+setbit     { return SETBIT; }
+setst      { return SETST; }
+skbit	   { return SKBIT; }
+skstf      { return SKSTF; }
+stb	   { return STB; }
+
 
 {lfirst}{lmiddle}*	{
                           iasm_lval.string = newstr (yytext);

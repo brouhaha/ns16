@@ -1,7 +1,7 @@
 /*
 Copyright 1995, 2004, 2005, 2006, 2007, 2008, 2009 Eric Smith <eric@brouhaha.com>
 All rights reserved.
-$Id: pasmy.y,v 1.1 2009/05/10 00:23:51 eric Exp eric $
+$Id: iasmy.y,v 1.1 2009/05/24 18:52:48 eric Exp eric $
 */
 
 %name-prefix="iasm_"
@@ -19,9 +19,10 @@ void iasm_error (char *s);
 %}
 
 %union {
-    uword_t integer;
-    char *string;
-  }
+  uword_t integer;
+  udword_t udword;
+  char *string;
+}
 
 %token <integer> INTEGER
 %token <string> IDENT
@@ -78,6 +79,24 @@ void iasm_error (char *s);
 %token SUB
 %token XCHRS
 
+%token CLRBIT
+%token CLRST
+%token CMPBIT
+%token DADD
+%token DIV
+%token DSUB
+%token ISCAN
+%token JINT
+%token JMPP
+%token JSRP
+%token LDB
+%token MPY
+%token SETBIT
+%token SETST
+%token SKBIT
+%token SKSTF
+%token STB
+
 %type <string> ident
 
 %type <integer> expr
@@ -96,6 +115,7 @@ void iasm_error (char *s);
 %type <integer> rela
 %type <integer> ea
 %type <integer> ea_lit
+%type <udword> ea_double
 
 %type <integer> field_list
 %type <integer> field
@@ -114,7 +134,7 @@ line		:	pseudo_op
 
 /*
  * Unfortunately the National Semiconductor assembler does allow the use
- * of mnemonics as labels.  We special-case the four that are used in
+ * of mnemonics as labels.  We special-case the five that are used in
  * FIG-Forth.
  */
 ident		: IDENT { $$ = $1; }
@@ -122,6 +142,7 @@ ident		: IDENT { $$ = $1; }
 		| OR { $$ = "or"; }
 		| PUSH { $$ = "push"; }
 		| PULL { $$ = "pull"; }
+		| SUB { $$ = "sub"; }
 		;
 
 label		: ident ':'	{ do_label ($1); }
@@ -213,7 +234,7 @@ word_lit_list	: word_lit
 
 word_lit	: expr { emit ($1); } ;
 
-instruction	: form_subst
+std_instruction	: form_subst
 		| add_inst
 	        | aisz_inst
 		| and_inst
@@ -226,6 +247,7 @@ instruction	: form_subst
 		| jmp_ind_inst
 		| jsr_inst
 		| jsr_ind_inst
+		| jsri_inst
 		| ld_inst
 		| ld_ind_inst
 		| li_inst
@@ -257,7 +279,27 @@ instruction	: form_subst
 		| sub_inst
 		| xchrs_inst
 
-eis_instruction	: jsri_inst
+eis_instruction	: clrbit_inst
+		| clrst_inst
+		| cmpbit_inst
+		| dadd_inst
+		| div_inst
+		| dsub_inst
+		| iscan_inst
+		| jint_inst
+		| jmpp_inst
+		| jsrp_inst
+		| ldb_inst
+		| mpy_inst
+		| setbit_inst
+		| setst_inst
+		| skbit_inst
+		| skstf_inst
+		| stb_inst
+		;
+
+instruction	: std_instruction
+		| eis_instruction
 		;
 
 /*
@@ -300,9 +342,26 @@ pushf_inst	: PUSHF             { emit (0x0080); } ;
 rti_inst	: RTI count         { emit (0x0100 + $2); } ;
 rts_inst	: RTS count         { emit (0x0200 + $2); } ;
 pullf_inst	: PULLF             { emit (0x0280); } ;
-jsri_inst	: JSRI expr         { emit (0x0380 + (range ($2, 0xff80, 0xffff) & 0x7f)); } ;
+jsrp_inst       : JSRP count        { emit (0x0300 + $2); } ;
+jsri_inst	: JSRI expr         { emit (0x0380 + (u_range ($2, 0xff80, 0xffff) & 0x7f)); } ;
 rin_inst	: RIN count         { emit (0x0400 + $2); } ;
+mpy_inst	: MPY ea_double     { emit (0x0480 + $2.word1); emit ($2.word2); } ;
+div_inst	: DIV ea_double     { emit (0x0490 + $2.word1); emit ($2.word2); } ;
+dadd_inst	: DADD ea_double    { emit (0x04a0 + $2.word1); emit ($2.word2); } ;
+dsub_inst	: DSUB ea_double    { emit (0x04b0 + $2.word1); emit ($2.word2); } ;
+ldb_inst	: LDB ea_double     { emit (0x04c0 + $2.word1); emit ($2.word2); } ;
+stb_inst	: STB ea_double     { emit (0x04d0 + $2.word1); emit ($2.word2); } ;
+jmpp_inst	: JMPP nib          { emit (0x0500 + $2); } ;
+iscan_inst	: ISCAN             { emit (0x0510); } ;
+jint_inst	: JINT nib          { emit (0x0520 + $2); } ;
 rout_inst	: ROUT count        { emit (0x0600 + $2); } ;
+setst_inst	: SETST nib         { emit (0x0700 + $2); } ;
+clrst_inst	: CLRST nib         { emit (0x0710 + $2); } ;
+setbit_inst	: SETBIT nib        { emit (0x0720 + $2); } ;
+clrbit_inst	: CLRBIT nib        { emit (0x0730 + $2); } ;
+skstf_inst	: SKSTF nib         { emit (0x0740 + $2); } ;
+skbit_inst	: SKBIT nib         { emit (0x0750 + $2); } ;
+cmpbit_inst	: CMPBIT nib        { emit (0x0760 + $2); } ;
 sflg_inst	: SFLG flag         { emit (0x0800 + ($2 << 8)); } ;
 pflg_inst	: PFLG flag         { emit (0x0880 + ($2 << 8)); } ;
 boc_inst	: BOC nib ',' rela  { emit (0x1000 + ($2 << 8) + $4); } ;
@@ -357,6 +416,11 @@ ea		: expr { if ($1 < 256)
 			   $$ = (1 << 8) + (s_range ($1 - (pc + 1), -128, 127) & 0xff); }
 		| '(' ac23 ')' { $$ = $2 << 8; }
 		| sb '(' ac23 ')' { $$ = ($3 << 8) + $1; }
+		;
+
+ea_double	: expr { $$.word1 = 0; $$.word2 = $1; }
+		| '(' ac23 ')' { $$.word1 = $2 << 8; $$.word2 = 0; }
+		| expr '(' ac23 ')' { $$.word1 = $3 << 8; $$.word2 = $1; }
 		;
 
 /*
