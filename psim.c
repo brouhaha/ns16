@@ -1,6 +1,10 @@
 // Copyright 2009 Eric Smith <eric@brouhaha.com>
 // All rights reserved.
-// $Id: psim.c,v 1.4 2010/07/06 19:32:23 eric Exp eric $
+// $Id: psim.c,v 1.5 2010/07/06 19:38:12 eric Exp eric $
+
+// Limitations:
+//  interrupts not supported
+//  decimal add (DECA) instruction not supported
 
 #include <stdbool.h>
 #include <stdint.h>

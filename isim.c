@@ -1,13 +1,21 @@
 // Copyright 2009 Eric Smith <eric@brouhaha.com>
 // All rights reserved.
-// $Id: isim.c,v 1.1 2009/05/25 01:14:53 eric Exp eric $
+// $Id: isim.c,v 1.2 2010/07/06 19:38:12 eric Exp eric $
+
+// Limitations:
+//  interrupts not supported
+//  I/O instructions (RIN, ROUT) not supported
+//  EIS, POWR I/O, Arithmetic CROM instructions not supported
 
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <termios.h>
 #include <unistd.h>
+
+typedef uint16_t word_t;
 
 char *block_fn = "figforth_blocks";
 FILE *block_f;
@@ -32,14 +40,14 @@ bool flags [16];  // general-purpose flags
 #define ov (flags [14])
 #define lk (flags [15])
 
-bool ext_flags [8];  // external flag outputs
-#define int_en (ext_flags [1])
-#define sel (ext_flags [1])
+bool ext_flag [8];  // external flag outputs
+#define int_en (ext_flag [1])
+#define sel (ext_flag [1])
 
 // external inputs
 bool interrupt_line;
-bool control_panel_interrupt;
-bool control_panel_start;
+
+bool cont_in;
 bool jc12;
 bool jc13;
 bool jc14;
@@ -51,6 +59,18 @@ bool jc15;
 void reset (void)
 {
   sp = 0;  // stack empty
+  pc = 0x0000;
+  ac [0] = 0x0000;
+  ac [1] = 0x0000;
+  ac [2] = 0x0000;
+  ac [3] = 0x0000;
+  memset (stack, 0, sizeof (stack));
+
+  cont_in = false;
+  jc12 = false;
+  jc13 = false;
+  jc14 = false;
+  jc15 = false;
 }
 
 int signExtend (int b)
@@ -84,14 +104,14 @@ int add (int a, int b, bool carryIn)
   return sum16 & WORD_MASK;
 }
 
-int decimalAdd (int a, int b, bool carryIn)
-{
-  halt = true;  // $$$
-  return 0;
-}
+int rotateLeft (int data, int width, int count);
 
 int rotateRight (int data, int width, int count)
 {
+  if (count == 0)
+    return data;
+  if (count < 0)
+    return rotateLeft (data, width, -count);
   while (count > width)
     count -= width;
   while (count-- != 0)
@@ -105,6 +125,10 @@ int rotateRight (int data, int width, int count)
 
 int rotateLeft (int data, int width, int count)
 {
+  if (count == 0)
+    return data;
+  if (count < 0)
+    return rotateRight (data, width, -count);
   while (count >= width)
     count -= width;
   while (count-- != 0)
@@ -116,24 +140,38 @@ int rotateLeft (int data, int width, int count)
   return data;
 }
 
-void setOutputFlag (int flag, bool value)
+int shiftLeft (int data, int width, int count);
+
+int shiftRight (int data, int width, int count)
 {
-  if ((flag >= 11) && (flag <= 14))
-    output_flag [flag - 11] = value;
-  else
-    halt = true;  // $$$ fatal error
+  if (count == 0)
+    return data;
+  if (count < 0)
+    return shiftLeft (data, width, -count);
+  // $$$
+  return data;
+}
+
+int shiftLeft (int data, int width, int count)
+{
+  if (count == 0)
+    return data;
+  if (count < 0)
+    return shiftRight (data, width, -count);
+  // $$$
+  return data;
 }
 
 void push (int value)
 {
-  stack [sp++] = value;
-  if (sp > STACK_SIZE)
+  stack [sp] = value;
+  if (++sp >= STACK_SIZE)
     sp = 0;
 }
 
 int pull (void)
 {
-  uword_t data;
+  word_t data;
 
   if (--sp < 0)
     sp = STACK_SIZE - 1;
@@ -142,10 +180,15 @@ int pull (void)
   return data;
 }
 
+bool stack_full (void)
+{
+  return stack [sp] != 0;
+}
+
 int getFR (void)
 {
   int i;
-  uword_t data;
+  word_t data;
 
   data = 0;
   for (i = 15; i >= 0; i--)
@@ -156,6 +199,8 @@ int getFR (void)
 
 void setFR (int value)
 {
+  int i;
+
   for (i = 0; i <= 15; i++)
     {
       flags [i] = value & 1;
@@ -228,7 +273,7 @@ void printWordName (int addr)
     }
 }
 
-const char *boc_cond [16] =
+const char *boc_cond_name [16] =
   {
     [0x0] = "int",
     [0x1] = "zero",
@@ -264,9 +309,7 @@ void disassembleInstruction (int addr, int instruction, char *buf)
 {
   int inst1110 = (instruction >> 10) & 0x3;
   int inst98 = (instruction >> 8) & 0x3;
-  int inst76 = (instruction >> 6) & 0x3;
   int instLowByte = instruction & 0xff;
-  int count = instLowByte >> 1;
   int ea = 0;
   int target = (addr + 1 + signExtend (instruction & BYTE_MASK)) & WORD_MASK;
 
@@ -296,33 +339,38 @@ void disassembleInstruction (int addr, int instruction, char *buf)
 	      return;
 	    case 0x2:  sprintf (buf, "RTI %d", instruction & 0x7f);
 	      return;
+	    // case 0x3:  RSTK, SSTK, RSAC, SSAC, MOUT, MIN, BOUT, BIN) POWR I/O
 	    case 0x4:  sprintf (buf, "RTS %d", instruction & 0x7f);
 	      return;
 	    case 0x5:  sprintf (buf, "PULLF");
 	      return;
+	    // case 0x6:  JSRP (EIS)
 	    case 0x7:  sprintf (buf, "JSRI %05x", 0xff80 + (instruction & 0x7f));
 	      return;
 	    case 0x8:  sprintf (buf, "RIN %d", instruction & 0x7f);
 	      return;
+	    // case 0x9:  MPY, DIV, DADD, DSUB, LDB, STB (EIS)
+	    // case 0xa:  JMPP, ISCAN, JINT (EIS), SCAN, SRCH, MSCAN (POWR I/O)
 	    case 0xc:  sprintf (buf, "ROUT %d", instruction & 0x7f);
 	      return;
+	    // case 0xe:  SETST, CLRST, SETBIT, CLRBIT, SKSTF, SKBIT, CMPBIT (EIS)
 	    }
+	}
+      else
+	{
+	  if ((instruction & 0x0080) == 0)
+	    sprintf (buf, "SFLG %s,%d", ext_flag_name [(instruction >> 8) & 7], instruction & 0x7f);
 	  else
-	    {
-	      if ((instruction & 0x0080) == 0)
-		sprintf (buf, "SFLG %s,%d", ??? [(instruction >> 8) & 7], instruction & 0x7f);
-	      else
-		sprintf (buf, "PFLG %s,%d", ??? [(instruction >> 8) & 7], instruction & 0x7f);
-	      return;
-	    }
+	    sprintf (buf, "PFLG %s,%d", ext_flag_name [(instruction >> 8) & 7], instruction & 0x7f);
+	  return;
 	}
       sprintf (buf, "HALT");
       return;
     case 0x1:
-      sprintf (buf, "BOC %s, %05x", boc_cond [(instruction >> 12) & 0xf], target);
+      sprintf (buf, "BOC %s, %05x", boc_cond_name [(instruction >> 12) & 0xf], target);
       return;
     case 0x2:
-      switch ((inst >> 10) & 3)
+      switch ((instruction >> 10) & 3)
 	{
 	case 0:
 	  sprintf (buf, "JMP %05x", ea);
@@ -338,7 +386,7 @@ void disassembleInstruction (int addr, int instruction, char *buf)
 	  return;
 	}
     case 0x3:
-      switch (inst & 0x83)
+      switch (instruction & 0x83)
 	{
 	case 0x00:
 	  break;
@@ -371,7 +419,7 @@ void disassembleInstruction (int addr, int instruction, char *buf)
 	  sprintf (buf, "PULL %d", inst98);
 	  return;
 	case 2:
-	  sprintf (buf, "AISZ %d,%05x", isnt98, signExtend (instLowByte));
+	  sprintf (buf, "AISZ %d,%05x", inst98, signExtend (instLowByte));
 	  return;
 	case 3:
 	  sprintf (buf, "LI %05x", signExtend (instLowByte));
@@ -400,7 +448,7 @@ void disassembleInstruction (int addr, int instruction, char *buf)
 	  return;
 	}
     case 0x6:
-      if ((inst & 0x0800) == 0)
+      if ((instruction & 0x0800) == 0)
 	sprintf (buf, "AND %d,%05x", (instruction >> 10) & 1, ea);
       else
 	sprintf (buf, "OR %d,%05x", (instruction >> 10) & 1, ea);
@@ -417,182 +465,28 @@ void disassembleInstruction (int addr, int instruction, char *buf)
 	}
       break;
     case 0x8:
-      sprintf (buf, "LD %d,%05x", inst1011, ea);
+      sprintf (buf, "LD %d,%05x", inst1110, ea);
       return;
     case 0x9:
-      sprintf (buf, "LD %d,@%05x", inst1011, ea);
+      sprintf (buf, "LD %d,@%05x", inst1110, ea);
       return;
     case 0xa:
-      sprintf (buf, "ST %d,%05x", inst1011, ea);
+      sprintf (buf, "ST %d,%05x", inst1110, ea);
       return;
     case 0xb:
-      sprintf (buf, "ST %d,@%05x", inst1011, ea);
+      sprintf (buf, "ST %d,@%05x", inst1110, ea);
       return;
     case 0xc:
-      sprintf (buf, "ADD %d,%05x", inst1011, ea);
+      sprintf (buf, "ADD %d,%05x", inst1110, ea);
       return;
     case 0xd:
-      sprintf (buf, "SUB %d,%05x", inst1011, ea);
+      sprintf (buf, "SUB %d,%05x", inst1110, ea);
       return;
     case 0xe:
-      sprintf (buf, "SKG %d,%05x", inst1011, ea);
+      sprintf (buf, "SKG %d,%05x", inst1110, ea);
       return;
-    case 0xe:
-      sprintf (buf, "SKNE %d,%05x", inst1011, ea);
-      return;
-
-    case 0x01:  // CFR: copy flags to register
-      sprintf (buf, "CFR");
-      return;
-    case 0x02:  // CRF: copy register into flags
-      sprintf (buf, "CRF");
-      return;
-    case 0x03:  // PUSHF: push flags onto stack
-      sprintf (buf, "PUSHF");
-      return;
-    case 0x04:  // PULLF: pull stack into flags
-      sprintf (buf, "PULLF");
-      return;
-    case 0x05:  // JSR: jump to subroutine
-      sprintf (buf, "JSR %04x", ea);
-      return;
-    case 0x06:  // JMP
-      sprintf (buf, "JMP %04x", ea);
-      return;
-    case 0x07:  // XCHRS: exchange register and stack
-      sprintf (buf, "XCHRS %d", inst98);
-      return;
-    case 0x08:  // ROL: rotate left
-      sprintf (buf, "ROL %d,%d,%d", inst98, count, instruction & 1);
-      return;
-    case 0x09:  // ROR: rotate right
-      sprintf (buf, "ROR %d,%d,%d", inst98, count, instruction & 1);
-      return;
-    case 0x0a:  // SHL: shift left
-      sprintf (buf, "SHL %d,%d,%d", inst98, count, instruction & 1);
-      return;
-    case 0x0b:  // SHR: shift right
-      sprintf (buf, "SHR %d,%d,%d", inst98, count, instruction & 1);
-      return;
-    case 0x0c:
-    case 0x0d:
-    case 0x0e:
-    case 0x0f:
-      if ((instruction & 0x0080) != 0)
-	sprintf (buf, "SFLG %d", (instruction >> 8) & 0x0f);
-      else
-	sprintf (buf, "PFLG %d", (instruction >> 8) & 0x0f);
-      return;
-    case 0x10:
-    case 0x11:
-    case 0x12:
-    case 0x13:	// BOC:  branch on condition
-      sprintf (buf, "BOC %s %04x", boc_cond [(instruction >> 8) & 0xf], target);
-      return;
-    case 0x14:  // LI: load immediate
-      sprintf (buf, "LI %d,%04x", inst98, signExtend (instLowByte));
-      return;
-    case 0x15:  // RAND: register and
-      sprintf (buf, "RAND %d,%d", inst76, inst98);
-      return;
-    case 0x16:  // RXOR: register exclusive or
-      sprintf (buf, "RXOR %d,%d", inst76, inst98);
-      return;
-    case 0x17:  // RCPY: register copy
-      if ((inst98 == 0) && (inst76 == 0))
-	sprintf (buf, "NOP");
-      else
-	sprintf (buf, "RCPY %d,%d", inst76, inst98);
-      return;
-    case 0x18:  // PUSH: push register onto stack
-      sprintf (buf, "PUSH %d", inst98);
-      return;
-    case 0x19:  // PULL: pull stack into register
-      sprintf (buf, "PULL %d", inst98);
-      return;
-    case 0x1a:  // RADD: register add
-      sprintf (buf, "RADD %d,%d", inst76, inst98);
-      return;
-    case 0x1b:  // RXCH: register exchange
-      sprintf (buf, "RXCH %d,%d", inst76, inst98);
-      return;
-    case 0x1c:  // CAI: complement and add immediate
-      sprintf (buf, "CAI %d,%04x", inst98, signExtend (instLowByte));
-      return;
-    case 0x1d:  // RADC: register add with carry
-      sprintf (buf, "RADC %d,%d", inst76, inst98);
-      return;
-    case 0x1e:  // AISZ: add immediate, skip if zero
-      sprintf (buf, "AISZ %d,%04x", inst98, signExtend (instLowByte));
-      return;
-    case 0x1f:  // RTI: return from interrupt
-      sprintf (buf, "RTI %d", instLowByte);
-      return;
-    case 0x20:  // RTS: return from subroutine
-      sprintf (buf, "RTS %d", instLowByte);
-      return;
-    case 0x22:  // DECA: decimal add
-      sprintf (buf, "DECA %04x", ea);
-      return;
-    case 0x23:  // ISZ: increment and skip if zero
-      sprintf (buf, "ISZ %04x", ea);
-      return;
-    case 0x24:  // SUBB: subtract with borrow
-      sprintf (buf, "SUBB %04x", ea);
-      return;
-    case 0x25:  // JSR @: jump to subroutine indirect
-      sprintf (buf, "JSR @ %04x", ea);
-      return;
-    case 0x26:  // JMP @: jump indirect
-      sprintf (buf, "JMP @ %04x", ea);
-      return;
-    case 0x27:  // SKG: skip if greater
-      sprintf (buf, "SKG %04x", ea);
-      return;
-    case 0x28:  // LD @: load indirect
-      sprintf (buf, "LD @ %04x", ea);
-      return;
-    case 0x29:  // OR: logical or
-      sprintf (buf, "OR %04x", ea);
-      return;
-    case 0x2a:  // AND: logical and
-      sprintf (buf, "AND %04x", ea);
-      return;
-    case 0x2b:  // DSZ: decrement and skip if zero
-      sprintf (buf, "DSZ %04x", ea);
-      return;
-    case 0x2c:  // ST @: store indirect
-      sprintf (buf, "ST @ %04x", ea);
-      return;
-    case 0x2e:  // SKAZ: skip if AND is zero
-      sprintf (buf, "SKAZ %04x", ea);
-      return;
-    case 0x2f:  // LSEX: load with sign extend
-      sprintf (buf, "LSEX %04x", ea);
-      return;
-    case 0x30:
-    case 0x31:
-    case 0x32:
-    case 0x33:  // LD: load
-      sprintf (buf, "LD %d,%04x", inst1110, ea);
-      return;
-    case 0x34:
-    case 0x35:
-    case 0x36:
-    case 0x37:  // ST: store
-      sprintf (buf, "ST %d,%04x", inst1110, ea);
-      return;
-    case 0x38:
-    case 0x39:
-    case 0x3a:
-    case 0x3b:  // ADD
-      sprintf (buf, "ADD %d,%04x", inst1110, ea);
-      return;
-    case 0x3c:
-    case 0x3d:
-    case 0x3e:
-    case 0x3f:  // SKNE: skip if not equal
-      sprintf (buf, "SKNE %d,%04x", inst1110, ea);
+    case 0xf:
+      sprintf (buf, "SKNE %d,%05x", inst1110, ea);
       return;
     default:
       sprintf (buf, "ill op %04x", instruction);
@@ -604,11 +498,11 @@ void executeInstruction ()
 {
   // temporaries
   int instruction;
+  int inst10;
   int inst1110;
   int inst98;
   int inst76;
   int instLowByte;
-  int count;
   int ea = 0;
   bool condition = false;
   int temp;
@@ -642,199 +536,93 @@ void executeInstruction ()
     }
   pc = (pc + 1) & WORD_MASK;
 
+  inst10 = (instruction >> 10) & 0x1;
   inst1110 =  (instruction >> 10) & 0x03;
   inst98 = (instruction >> 8) & 0x03;
   inst76 = (instruction >> 6) & 0x03;
   instLowByte = instruction & BYTE_MASK;
-  count = instLowByte >> 1;
 
   switch (inst98)
     {
-    case 0:
-      if (base_page_split)
-	ea = signExtend (instLowByte);
-      else
-	ea = instLowByte;
-      break;
-    case 1:
+    case 0:  // base page
+      ea = instLowByte;
+    case 1:  // PC relative
       ea = (pc + signExtend (instLowByte)) & WORD_MASK;
       break;
-    case 2:
+    case 2:  // indexed
     case 3:
       ea = (ac [inst98] + signExtend (instLowByte)) & WORD_MASK;
     }
 
-  switch (instruction >> 10)
+  switch (instruction >> 12)
     {
-    case 0x00:  // HALT
-      halt = true;
-      break;
-    case 0x01:  // CFR: copy flags to register
-      ac [inst98] = getFR ();
-      break;
-    case 0x02:  // CRF: copy register into flags
-      setFR (ac [inst98]);
-      break;
-    case 0x03:  // PUSHF: push flags onto stack
-      push (getFR ());
-      break;
-    case 0x04:  // PULLF: pull stack into flags
-      setFR (pull ());
-      break;
-    case 0x05:  // JSR: jump to subroutine
-      push (pc);
-      pc = ea;
-      break;
-    case 0x06:  // JMP
-      pc = ea;
-      break;
-    case 0x07:  // XCHRS: exchange register and stack
-      temp = ac [inst98];
-      if (sp < 0)
-	ac [inst98] = WORD_MASK;
+    case 0x00:
+      if ((instruction & 0x0800) == 0)
+	{
+	  switch ((instruction >> 7) & 0xf)
+	    {
+	    case 0x0:  // HALT
+	      halt = true;
+	      break;
+	    case 0x1:  // PUSHF
+	      push (getFR ());
+	      break;
+	    case 0x2:  // RTI
+	      pc = (pull () + instLowByte) & WORD_MASK;
+	      int_en = true;
+	      break;
+	    // case 0x3:  RSTK, SSTK, RSAC, SSAC, MOUT, MIN, BOUT, BIN) POWR I/O
+	    case 0x4:  // RTS
+	      pc = (pull () + instLowByte) & WORD_MASK;
+	      break;
+	    case 0x5:  // PULLF
+	      setFR (pull ());
+	      break;
+	    // case 0x6:  JSRP (EIS)
+	    case 0x7:  // JSRI
+	      push (pc);
+	      pc = 0xff80 + (instLowByte & 0x7f);
+	      break;
+	    case 0x8:  // RIN
+	      halt = true; // $$$
+	      break;
+	    // case 0x9:  MPY, DIV, DADD, DSUB, LDB, STB (EIS)
+	    // case 0xa:  JMPP, ISCAN, JINT (EIS), SCAN, SRCH, MSCAN (POWR I/O)
+	    case 0xc:  // ROUT
+	      halt = true; // $$$
+	      break;
+	    // case 0xe:  SETST, CLRST, SETBIT, CLRBIT, SKSTF, SKBIT, CMPBIT (EIS)
+	    }
+	}
       else
 	{
-	  ac [inst98] = stack [sp];
-	  stack [sp] = temp;
-	}
-      break;
-    case 0x08:  // ROL: rotate left
-      if (count == 0)
-	break;
-      if (byte_mode)
-	{
-	  if ((instruction & 1) != 0)
-	    temp = rotateLeft ((ac [inst98] & BYTE_MASK) |
-			       (lk ? (1 << 8) : 0), 9, count);
+	  if ((instruction & 0x0080) == 0)
+	    setFlag ((instruction >> 8) & 0x0f);  // SFLG
 	  else
-	    temp = rotateLeft (ac [inst98] & BYTE_MASK, 8, count);
-	  ac [inst98] = temp & BYTE_MASK;
-	  if ((instruction & 1) != 0)
-	    lk = ((temp >> 8) & 1) != 0;
-	}
-      else
-	{
-	  if ((instruction & 1) != 0)
-	    temp = rotateLeft (ac [inst98] |
-			       (lk ? (1 << 16) : 0), 17, count);
-	  else
-	    temp = rotateLeft (ac [inst98], 16, count);
-	  ac [inst98] = temp & WORD_MASK;
-	  if ((instruction & 1) != 0)
-	    lk = ((temp >> 16) & 1) != 0;
+	    pulseFlag ((instruction >> 8) & 0x0f);  // PFLG
 	}
       break;
-    case 0x09:  // ROR: rotate right
-      if (count == 0)
-	break;
-      if (byte_mode)
-	{
-	  if ((instruction & 1) != 0)
-	    temp = rotateRight ((ac [inst98] & BYTE_MASK) |
-				(lk ? (1 << 8) : 0), 9, count);
-	  else
-	    temp = rotateRight (ac [inst98] & BYTE_MASK, 8, count);
-	  ac [inst98] = temp & BYTE_MASK;
-	  if ((instruction & 1) != 0)
-	    lk = ((temp >> 8) & 1) != 0;
-	}
-      else
-	{
-	  if ((instruction & 1) != 0)
-	    temp = rotateRight (ac [inst98] |
-				(lk ? (1 << 16) : 0), 17, count);
-	  else
-	    temp = rotateRight (ac [inst98], 16, count);
-	  ac [inst98] = temp & WORD_MASK;
-	  if ((instruction & 1) != 0)
-	    lk = ((temp >> 16) & 1) != 0;
-	}
-      break;
-    case 0x0a:  // SHL: shift left
-      if (count == 0)
-	break;
-      temp = ac [inst98] << count;
-      if (byte_mode)
-	{
-	  ac [inst98] = temp & BYTE_MASK;
-	  if ((instruction & 1) != 0)
-	    lk = ((temp >> 8) & 1) != 0;
-	}
-      else
-	{
-	  ac [inst98] = temp & WORD_MASK;
-	  if ((instruction & 1) != 0)
-	    lk = ((temp >> 16) & 1) != 0;
-	}
-      break;
-    case 0x0b:  // SHR: shift right
-      if (count == 0)
-	break;
-      if (byte_mode)
-	{
-	  temp = ac [inst98] & BYTE_MASK;
-	  if ((instruction & 1) != 0)
-	    temp |= (lk ? (1 << 8) : 0);
-	  temp >>= count;
-	  ac [inst98] = temp & BYTE_MASK;
-	}
-      else
-	{
-	  temp = ac [inst98];
-	  if ((instruction & 1) != 0)
-	    temp |= (lk ? (1 << 16) : 0);
-	  temp >>= count;
-	  ac [inst98] = temp;
-	}
-      break;
-    case 0x0c:
-    case 0x0d:
-    case 0x0e:
-    case 0x0f:
-      if ((instruction & 0x0080) != 0)
-	setFlag ((instruction >> 8) & 0x0f);  // SFLG
-      else
-	pulseFlag ((instruction >> 8) & 0x0f);  // PFLG
-      break;
-    case 0x10:
-    case 0x11:
-    case 0x12:
-    case 0x13:	// BOC:  branch on condition
+    case 0x01:	// BOC:  branch on condition
       switch ((instruction >> 8) & 0xf)
 	{
-	case 0x0:  condition = stackFull ();  break;
-	case 0x1:
-	  if (byte_mode)
-	    condition = ((ac [0] & BYTE_MASK) == 0); 
-	  else
-	    condition = (ac [0] == 0); 
-	  break;
-	case 0x2:
-	  if (byte_mode)
-	    condition = (((ac [0] >> 7) & 1) == 0);
-	  else
-	    condition = (((ac [0] >> 15) & 1) == 0);
-	  break;
+	case 0x0:  condition = stack_full ();   break;
+	case 0x1:  condition = (ac [0] == 0);  break;
+	case 0x2:  condition = (((ac [0] >> 15) & 1) == 0);  break;
 	case 0x3:  condition = ((ac [0] & 1) != 0);  break;
 	case 0x4:  condition = (((ac [0] >> 1) & 1) != 0);  break;
-	case 0x5:
-	  if (byte_mode)
-	    condition = ((ac [0] & BYTE_MASK) != 0); 
-	  else
-	    condition = (ac [0] != 0); 
-	  break;
+	case 0x5:  condition = (ac [0] != 0);  break;
 	case 0x6:  condition = (((ac [0] >> 1) & 2) != 0);  break;
-	case 0x7:  condition = continue_input;  break;
+	case 0x7:  condition = cont_in;  break;
 	case 0x8:  condition = lk;  break;
-	case 0x9:  condition = ien;  break;
-	case 0xa:  condition = cy;  break;
-	case 0xb:
-	  if (byte_mode)
-	    condition = (((ac [0] >> 7) & 1) != 0);
+	case 0x9:  condition = int_en;  break;
+	case 0xa:
+	  if (sel)
+	    condition = ov;
 	  else
-	    condition = (((ac [0] >> 15) & 1) != 0);
+	    condition = cy;
 	  break;
-	case 0xc:  condition = ov;  break;
+	case 0xb:  condition = (((ac [0] >> 15) & 1) != 0);  break;
+	case 0xc:  condition = jc12;  break;
 	case 0xd:  condition = jc13;  break;
 	case 0xe:  condition = jc14;  break;
 	case 0xf:  condition = jc15;  break;
@@ -842,155 +630,172 @@ void executeInstruction ()
       if (condition)
 	pc = (pc + signExtend (instruction & BYTE_MASK)) & WORD_MASK;
       break;
-    case 0x14:  // LI: load immediate
-      ac [inst98] = signExtend (instLowByte);
+    case 0x02:
+      if (instruction >> 11)
+	{
+	  push (pc);	  // JSR, JSR@: push PC
+	}
+      if (instruction >> 10)
+	{
+	  pc = mem [ea];  // JMP@, JSR@: indirect
+	}
+      pc = ea;
       break;
-    case 0x15:  // RAND: register and
-      ac [inst98] &= ac [inst76];
-      break;
-    case 0x16:  // RXOR: register exclusive or
-      ac [inst98] ^= ac [inst76];
-      break;
-    case 0x17:  // RCPY: register copy
-		// NOP: no operation when dr, sr both zero
-      ac [inst98] = ac [inst76];
-      break;
-    case 0x18:  // PUSH: push register onto stack
-      push (ac [inst98]);
-      break;
-    case 0x19:  // PULL: pull stack into register
-      ac [inst98] = pull ();
-      break;
-    case 0x1a:  // RADD: register add
-      ac [inst98] = add (ac [inst98], ac [inst76], false);
-      break;
-    case 0x1b:  // RXCH: register exchange
-      temp = ac [inst98];
-      ac [inst98] = ac [inst76];
-      ac [inst76] = temp;
-      break;
-    case 0x1c:  // CAI: complement and add immediate
-      ac [inst98] = ((ac [inst98] ^ WORD_MASK) + signExtend (instLowByte)) & WORD_MASK;
-      break;
-    case 0x1d:  // RADC: register add with carry
-      ac [inst98] = add (ac [inst98], ac [inst76], cy);
-      break;
-    case 0x1e:  // AISZ: add immediate, skip if zero
-      ac [inst98] = (ac[inst98] + signExtend (instLowByte)) & WORD_MASK;
-      if (ac [inst98] == 0)
-	pc = (pc + 1) & WORD_MASK;
-      break;
-    case 0x1f:  // RTI: return from interrupt
-      pc = (pull () + instLowByte) & WORD_MASK;
-      ien = true;
-      break;
-    case 0x20:  // RTS: return from subroutine
-      pc = (pull () + instLowByte) & WORD_MASK;
-      break;
-    case 0x22:  // DECA: decimal add
-      ac [0] = decimalAdd (ac [0], mem [ea], cy);
-      break;
-    case 0x23:  // ISZ: increment and skip if zero
-      mem [ea] = (mem [ea] + 1) & WORD_MASK;
-      if (byte_mode)
-	condition = ((mem [ea] & BYTE_MASK) == 0);
+    case 0x03:
+      if ((instruction & 0x0080) == 0)
+	{
+	  // RADD
+	  ac [inst98] = add (ac [inst98], ac [inst76], false);
+	}
       else
-	condition = (mem [ea] == 0);
-      if (condition)
-	pc = (pc + 1) & WORD_MASK;
+	switch (instruction & 0x03)
+	  {
+	  case 0x00:  // RXCH
+	    temp = ac [inst98];
+	    ac [inst98] = ac [inst76];
+	    ac [inst76] = temp;
+	    break;
+	  case 0x01:  // RCPY
+	    ac [inst98] = ac [inst76];
+	    break;
+	  case 0x02:  // RXOR
+	    ac [inst98] ^= ac [inst76];
+	    break;
+	  case 0x03:  // RAND
+	    ac [inst98] &= ac [inst76];
+	    break;
+	  }
       break;
-    case 0x24:  // SUBB: subtract with borrow
-      ac [0] = add (ac [0], mem [ea] ^ WORD_MASK, cy);
+    case 0x04:
+      switch ((instruction >> 10) & 0x03)
+	{
+	case 0x00:  // PUSH
+	  push (ac [inst98]);
+	  break;
+	case 0x01:  // PULL
+	  ac [inst98] = pull ();
+	  break;
+	case 0x02:  // AISZ
+	  ac [inst98] = (ac[inst98] + signExtend (instLowByte)) & WORD_MASK;
+	  if (ac [inst98] == 0)
+	    pc = (pc + 1) & WORD_MASK;
+	  break;
+	case 0x03:  // LI
+	  ac [inst98] = signExtend (instLowByte);
+	  break;
+	}
       break;
-    case 0x25:  // JSR @: jump to subroutine indirect
-      push (pc);
-      pc = mem [ea];
+    case 0x05:
+      switch ((instruction >> 10) & 0x03)
+	{
+	case 0x00:  // CAI
+	  ac [inst98] = ((ac [inst98] ^ WORD_MASK) + signExtend (instLowByte)) & WORD_MASK;
+	  break;
+	case 0x01:  // XCHRS
+	  temp = ac [inst98];
+	  if (sp < 0)
+	    ac [inst98] = WORD_MASK;
+	  else
+	    {
+	      ac [inst98] = stack [sp];
+	      stack [sp] = temp;
+	    }
+	  break;
+	case 0x02:  // ROL/ROR
+	  if (instLowByte == 0)
+	    break;
+	  if (sel)
+	    temp = rotateLeft (ac [inst98] |
+			       (lk ? (1 << 16) : 0), 17, instLowByte);
+	  else
+	    temp = rotateLeft (ac [inst98], 16, instLowByte);
+	  ac [inst98] = temp & WORD_MASK;
+	  if (sel)
+	    lk = ((temp >> 16) & 1) != 0;
+	  break;
+	case 0x03:  // SHL/SHR
+	  if (instLowByte == 0)
+	    break;
+	  if (sel)
+	    temp = shiftLeft (ac [inst98] |
+			       (lk ? (1 << 16) : 0), 17, instLowByte);
+	  else
+	    temp = shiftLeft (ac [inst98], 16, instLowByte);
+	  ac [inst98] = temp & WORD_MASK;
+	  if (sel)
+	    lk = ((temp >> 16) & 1) != 0;
+	  break;
+	}
       break;
-    case 0x26:  // JMP @: jump indirect
-      pc = mem [ea];
-      break;
-    case 0x27:  // SKG: skip if greater
-      if (byte_mode)
-	condition = (signedValue (signExtend (ac [0])) >
-		     signedValue (signExtend (mem [ea])));
+    case 0x06:
+      if ((instruction & 0x0800) == 0)
+	{
+	  // AND
+	  ac [inst10] = ac [inst10] & mem [ea];
+	}
       else
-	condition = (signedValue (ac [0]) >
-		     signedValue (mem [ea]));
-      if (condition)
-	pc = (pc + 1) & WORD_MASK;
+	{
+	  // OR
+	  ac [inst10] = ac [inst10] | mem [ea];
+	}
       break;
-    case 0x28:  // LD @: load indirect
-      ac [0] = mem [ mem [ea]];
-      break;
-    case 0x29:  // OR: logical or
-      ac [0] = ac [0] | mem [ea];
-      break;
-    case 0x2a:  // AND: logical and
-      ac [0] = ac [0] & mem [ea];
-      break;
-    case 0x2b:  // DSZ: decrement and skip if zero
-      mem [ea] = (mem [ea] - 1) & WORD_MASK;
-      if (byte_mode)
-	condition = ((mem [ea] & BYTE_MASK) == 0);
+    case 0x07:
+      if ((instruction & 0x0800) == 0)
+	{
+	  // SKAZ
+	  condition = ((ac [inst10] & mem [ea]) == 0);
+	  if (condition)
+	    pc = (pc + 1) & WORD_MASK;
+	}
+      else if ((instruction & 0x0400) == 0)
+	{
+	  // ISZ
+	  mem [ea] = (mem [ea] + 1) & WORD_MASK;
+	  condition = (mem [ea] == 0);
+	  if (condition)
+	    pc = (pc + 1) & WORD_MASK;
+	}
       else
-	condition = (mem [ea] == 0);
-      if (condition)
-	pc = (pc + 1) & WORD_MASK;
+	{
+	  // DSZ
+	  mem [ea] = (mem [ea] - 1) & WORD_MASK;
+	  condition = (mem [ea] == 0);
+	  if (condition)
+	    pc = (pc + 1) & WORD_MASK;
+	}
       break;
-    case 0x2c:  // ST @: store indirect
-      mem [mem [ea]] = ac [0];
-      break;
-    case 0x2e:  // SKAZ: skip if AND is zero
-      if (byte_mode)
-	condition = ((ac [0] & mem [ea] & 0xff) == 0);
-      else
-	condition = ((ac [0] & mem [ea]) == 0);
-      if (condition)
-	pc = (pc + 1) & WORD_MASK;
-      break;
-    case 0x2f:  // LSEX: load with sign extend
-      ac [0] = signExtend (mem [ea]);
-      break;
-    case 0x30:
-    case 0x31:
-    case 0x32:
-    case 0x33:  // LD: load
+    case 0x08:  // LD
       ac [inst1110] = mem [ea];
       break;
-    case 0x34:
-    case 0x35:
-    case 0x36:
-    case 0x37:  // ST: store
+    case 0x09:  // LD@
+      ac [inst1110] = mem [ mem [ea]];
+      break;
+    case 0x0a:  // ST
       mem [ea] = ac [inst1110];
       break;
-    case 0x38:
-    case 0x39:
-    case 0x3a:
-    case 0x3b:  // ADD
+    case 0x0b:  // ST@
+      mem [mem [ea]] = ac [inst1110];
+      break;
+    case 0x0c:  // ADD
       ac [inst1110] = add (ac [inst1110], mem [ea], false);
       break;
-    case 0x3c:
-    case 0x3d:
-    case 0x3e:
-    case 0x3f:  // SKNE: skip if not equal
-      if (byte_mode)
-	condition = ((ac [inst1110] & BYTE_MASK) !=
-		     (mem [ea] & BYTE_MASK));
-      else
-	condition = (ac [inst1110] != mem [ea]);
+    case 0x0d:  // SUB
+      ac [inst1110] = add (ac [inst1110], mem [ea] ^ WORD_MASK, 1);
+      break;
+    case 0x0e:  // SKG
+      condition = (signedValue (ac [0]) >
+		   signedValue (mem [ea]));
       if (condition)
 	pc = (pc + 1) & WORD_MASK;
       break;
-    case 0x21:
-    case 0x2d:
+    case 0x0f:  // SKNE
+      condition = (ac [inst1110] != mem [ea]);
+      if (condition)
+	pc = (pc + 1) & WORD_MASK;
+      break;
     default:
       halt = true;  // $$$ illegal opcode
       break;
-    }
-  if (ie0_defer)
-    {
-      ie [0] = true;
-      ie0_defer = false;
     }
 }
 
@@ -1142,7 +947,7 @@ void run (void)
 {
   int c;
 
-  loadHexFile ("figforth_pace.obj");
+  loadHexFile ("figforth_imp16.obj");
 
   block_f = fopen (block_fn, "r+b");
   if (! block_f)
