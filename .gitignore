@@ -1,0 +1,10 @@
+*~
+*.o
+*.lst
+*.obj
+[ip]asml.c
+[ip]asmy.[ch]
+[ip]asmy.output
+[ip]asm
+[ip]sim
+.sconsign.dblite
